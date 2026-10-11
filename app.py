@@ -147,15 +147,15 @@ def _clear_files():
     return None, None
 
 
-with gr.Blocks(title="小途 · 全能出行决策助手") as demo:
+with gr.Blocks(title="小水 · 全能出行决策助手") as demo:
 
     session_state = gr.State(value="")
 
     with gr.Row(elem_id="main-row"):
-        with gr.Column(scale=1):
+        with gr.Column(scale=5):
 
             gr.Markdown("""
-            # 🧳 小途 · 出行决策助手
+            # 🧳 小水 · 出行决策助手
             **LangGraph** 构建 · 7 大能力 · 高德地图数据 · 文档/图片智能融合 · AI 修图
             """)
 
@@ -164,15 +164,6 @@ with gr.Blocks(title="小途 · 全能出行决策助手") as demo:
                 for t, em in EXAMPLES
             ) + '</div>'
             gr.HTML(chips_html)
-
-            with gr.Row(elem_id="history-row"):
-                session_dropdown = gr.Dropdown(
-                    label="📜 历史对话（自动保存，重启可恢复）",
-                    choices=storage.list_sessions(),
-                    scale=8,
-                )
-                load_btn = gr.Button("📂 载入", scale=1)
-                delete_btn = gr.Button("🗑 删除", scale=1)
 
             chatbot = gr.Chatbot(
                 elem_id="chatbot",
@@ -191,18 +182,31 @@ with gr.Blocks(title="小途 · 全能出行决策助手") as demo:
                 send_btn = gr.Button("🚀 发送", elem_id="send-btn", scale=1)
                 clear_btn = gr.Button("🗑️ 新对话", elem_id="clear-btn", scale=1)
 
-            with gr.Row(elem_id="attach-row"):
-                with gr.Column(scale=1):
+        with gr.Column(scale=2, min_width=320, elem_id="side-col"):
+            with gr.Tabs(elem_id="side-tabs"):
+                with gr.Tab("📍 地图"):
+                    map_panel = gr.HTML(MAP_PLACEHOLDER, elem_id="map-panel")
+
+                with gr.Tab("📎 附件"):
                     file_upload = gr.File(
-                        label="📎 上传文档（PDF / TXT / Excel / Word）",
+                        label="文档（PDF / Excel / Word）",
                         file_types=[".pdf", ".txt", ".md", ".csv", ".json", ".xlsx", ".xls", ".docx"],
                         file_count="multiple",
                     )
-                with gr.Column(scale=1):
                     image_upload = gr.Image(
-                        label="🖼️ 上传图片（品牌/商场照片）",
+                        label="图片（品牌 / 商场照片）",
                         type="filepath",
+                        height=110,
                     )
+
+                with gr.Tab("📜 历史"):
+                    session_dropdown = gr.Dropdown(
+                        label="选择要载入的对话",
+                        choices=storage.list_sessions(),
+                    )
+                    with gr.Row(elem_id="history-btns"):
+                        load_btn = gr.Button("📂 载入", scale=1)
+                        delete_btn = gr.Button("🗑 删除", scale=1)
 
         if DEV_MODE:
             with gr.Column(scale=0, min_width=320, elem_id="sidebar"):
@@ -249,8 +253,6 @@ with gr.Blocks(title="小途 · 全能出行决策助手") as demo:
                 - VISION_MODEL 可选（如 `qwen3-vl-plus`），启用图片识别
                 - IMAGE_MODEL 可选（默认 qwen-image-3.0），AMAP_JS_KEY/AMAP_SECURITY_CODE 可选
                 """)
-
-    map_panel = gr.HTML(MAP_PLACEHOLDER, elem_id="map-panel")
 
     msg.submit(respond, [msg, chatbot, file_upload, image_upload, session_state],
                [msg, chatbot, session_state, map_panel, session_dropdown])

@@ -34,11 +34,23 @@ def init_db() -> None:
         )
 
 
+def _extract_text(content) -> str:
+    """兼容多模态消息：content 为列表时提取其中的文本部分。"""
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict) and p.get("type") == "text":
+                parts.append(str(p.get("text", "")))
+        return " ".join(parts).strip()
+    return str(content).strip()
+
+
 def _make_title(messages: list[dict]) -> str:
     for m in messages:
         if m.get("role") == "user":
-            text = str(m.get("content", "")).strip().replace("\n", " ")
-            return text[:24] + ("…" if len(text) > 24 else "")
+            text = _extract_text(m.get("content", "")).replace("\n", " ")
+            if text:
+                return text[:24] + ("…" if len(text) > 24 else "")
     return "新对话"
 
 
@@ -103,7 +115,24 @@ def list_sessions(limit: int = 50) -> list[tuple[str, str]]:
             "WHERE messages != '[]' ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [(r["title"] or "未命名对话", r["session_id"]) for r in rows]
+    return [(_clean_stored_title(r["title"]) or "未命名对话", r["session_id"]) for r in rows]
+
+
+def _clean_stored_title(title: str | None) -> str:
+    """清理历史遗留的 JSON 式标题，提取可读文本。"""
+    if not title:
+        return ""
+    t = title.strip()
+    if t.startswith("[") or t.startswith("{"):
+        try:
+            data = json.loads(t)
+            if isinstance(data, list):
+                return _extract_text(data)
+            if isinstance(data, dict):
+                return _extract_text([data])
+        except json.JSONDecodeError:
+            pass
+    return t
 
 
 def delete_session(session_id: str) -> None:

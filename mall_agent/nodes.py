@@ -12,7 +12,7 @@ from .state import AgentState
 from .tools.amap import ALL_TOOLS, search_nearby_malls, search_hotels, search_sightseeing, plan_route
 
 
-SYSTEM_PROMPT = """你是一个全能出行决策助手，名叫"小途"。用户会向你咨询各种出行相关的问题，你需要判断用户意图，调用合适的工具获取数据，最后给出清晰、实用的建议。
+SYSTEM_PROMPT = """你是一个全能出行决策助手，名叫"小水"。用户会向你咨询各种出行相关的问题，你需要判断用户意图，调用合适的工具获取数据，最后给出清晰、实用的建议。
 
 【你能做的事】
 1. shopping    —— 找商场、购物、逛街推荐
