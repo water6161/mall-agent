@@ -1,0 +1,13 @@
+services:
+  xiaotu:
+    build: .
+    image: xiaotu:latest
+    container_name: xiaotu
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "7860:7860"
+    volumes:
+      # 对话历史 / 生成图片持久化到宿主机
+      - ./data:/app/data
+      - ./generated:/app/generated
