@@ -8,6 +8,7 @@ venv/
 *.log
 _gradio.log
 logs/
+.edgeone/
 
 # 本地数据与生成产物，不上传仓库
 data/*.db

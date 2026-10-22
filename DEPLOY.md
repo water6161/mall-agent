@@ -1,4 +1,4 @@
-# 小水 · 出行决策助手 — 部署说明
+﻿# 小水 · 出行决策助手 — 部署说明
 
 支持三种部署方式：Docker（推荐）、宝塔面板、Linux 直跑。
 
@@ -74,7 +74,7 @@ docker compose up -d --build  # 更新代码后重新构建
    - 端口：`7860`
    - 安装依赖：在项目终端里执行
      ```bash
-     pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+     pip install -r requirements-local.txt -i https://mirrors.aliyun.com/pypi/simple/
      ```
 3. 网站 → 添加站点（绑定你的域名，如 `xiaotu.example.com`），不要创建数据库
 4. 进入该站点设置 →「反向代理」→「添加反向代理」：
@@ -102,7 +102,7 @@ mkdir -p /opt/xiaotu && cd /opt/xiaotu
 
 # 3. 虚拟环境 + 依赖
 python3 -m venv venv
-./venv/bin/pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+./venv/bin/pip install -r requirements-local.txt -i https://mirrors.aliyun.com/pypi/simple/
 ```
 
 创建服务文件 `/etc/systemd/system/xiaotu.service`：
