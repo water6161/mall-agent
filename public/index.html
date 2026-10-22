@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>小水 · 全能出行决策助手</title>
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">🧳 <span>小水</span></div>
+    <button class="new-chat" id="newChat">＋ 新对话</button>
+    <div class="side-title">最近对话</div>
+    <div class="history" id="historyList"></div>
+    <div class="side-tip">问商场、找酒店、认景点<br />发张照片我就能告诉你这是哪儿</div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="sideToggle" title="切换侧边栏">☰</button>
+      <div class="title">小水 <span>出行决策助手</span></div>
+      <button class="icon-btn map-toggle" id="mapToggle" title="位置地图">📍</button>
+    </header>
+
+    <section class="chat" id="chat">
+      <div class="welcome" id="welcome">
+        <div class="welcome-title">有什么我能帮你的吗？</div>
+        <div class="welcome-sub">找商场 · 挑酒店 · 认景点 · 规划玩法</div>
+        <div class="welcome-examples">
+          <button class="example" data-text="北京有什么好逛的商场？我喜欢高端品牌">💎 北京有什么好逛的商场？</button>
+          <button class="example" data-text="上海外滩附近性价比高的酒店推荐">🏨 上海外滩附近性价比酒店</button>
+          <button class="example" data-text="成都两天怎么玩？帮我推荐景点">✈️ 成都两天怎么玩？</button>
+          <button class="example" id="examplePhoto">📷 上传照片，帮我认认这是哪儿</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="composer">
+      <div class="attach-preview" id="attachPreview" hidden>
+        <img id="attachThumb" alt="待识别照片" />
+        <button id="attachRemove" title="移除">✕</button>
+      </div>
+      <div class="composer-inner">
+        <button class="tool-btn" id="imgBtn" title="上传景点照片">📷</button>
+        <input type="file" id="imgInput" accept="image/*" hidden />
+        <textarea id="input" rows="1" placeholder="问问附近有什么商场，或上传一张景点照片让我认认～"></textarea>
+        <button class="send-btn" id="sendBtn">发送</button>
+      </div>
+    </div>
+  </main>
+
+  <aside class="map-panel" id="mapPanel">
+    <div class="map-head">
+      <span>📍 位置地图</span>
+      <button class="icon-btn" id="mapClose" title="收起">✕</button>
+    </div>
+    <div class="map-body" id="mapBody">
+      <div class="map-empty">发送消息后，查询到的地点会在这里展示 🌍</div>
+    </div>
+  </aside>
+
+</div>
+<script src="./app.js"></script>
+</body>
+</html>
