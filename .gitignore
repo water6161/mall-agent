@@ -3,7 +3,14 @@ __pycache__/
 .env
 .env.local
 .venv/
+.venv*/
 venv/
 *.log
 _gradio.log
+
+# 本地数据与生成产物，不上传仓库
+data/*.db
+data/*.db-journal
+generated/
+
 !start.bat

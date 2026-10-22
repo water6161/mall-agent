@@ -237,7 +237,7 @@ with gr.Blocks(title="小水 · 全能出行决策助手", css=CSS, js=JS) as de
     <button id="sidebar-toggle" class="sidebar-toggle" title="切换侧边栏">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
     </button>
-    """)
+    """, elem_id="sidebar-toggle-wrap")
 
     with gr.Row(elem_id="app-root"):
 
@@ -257,6 +257,11 @@ with gr.Blocks(title="小水 · 全能出行决策助手", css=CSS, js=JS) as de
             with gr.Row(elem_id="sidebar-history-btns"):
                 load_btn = gr.Button("📂 载入", scale=1, elem_classes=["sb-btn"])
                 delete_btn = gr.Button("🗑 删除", scale=1, elem_classes=["sb-btn"])
+
+            gr.HTML('<div class="sidebar-section-title">工具</div>')
+            with gr.Row(elem_id="sidebar-tools"):
+                attach_btn = gr.Button("📎 附件", scale=1, size="sm")
+                image_btn = gr.Button("🖼️ 图片", scale=1, size="sm")
 
         with gr.Column(scale=1, elem_id="main-content"):
 
@@ -290,9 +295,6 @@ with gr.Blocks(title="小水 · 全能出行决策助手", css=CSS, js=JS) as de
                         visible=False,
                         elem_id="image-upload-hidden",
                     )
-
-                    attach_btn = gr.Button("📎", elem_id="attach-btn", size="sm")
-                    image_btn = gr.Button("🖼️", elem_id="image-btn", size="sm")
 
                     msg = gr.Textbox(
                         show_label=False,
