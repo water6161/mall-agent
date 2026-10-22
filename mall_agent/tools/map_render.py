@@ -23,6 +23,37 @@ CATEGORY_LABELS = {
 }
 STATIC_LIMIT = 12
 JS_LIMIT = 60
+LIST_LIMIT = 20
+
+
+def _poi_links(p: dict) -> str:
+    name_enc = p["name"].replace(" ", "+")
+    uri_marker = f"https://uri.amap.com/marker?position={p['lng']},{p['lat']}&name={name_enc}"
+    uri_nav = f"https://uri.amap.com/navigation?to={p['lng']},{p['lat']}&toname={name_enc}&mode=transit"
+    return uri_marker, uri_nav
+
+
+def _build_poi_list_html(points: list[dict]) -> str:
+    cards = []
+    for p in points[:LIST_LIMIT]:
+        color = CATEGORY_COLORS.get(p["category"], "#999")
+        label = CATEGORY_LABELS.get(p["category"], "")
+        uri_marker, uri_nav = _poi_links(p)
+        addr = p["address"] or "地址未知"
+        cards.append(
+            f'<div class="poi-card">'
+            f'  <div class="poi-pin" style="background:{color}">{label}</div>'
+            f'  <div class="poi-info">'
+            f'    <div class="poi-name">{p["name"]}</div>'
+            f'    <div class="poi-addr">{addr}</div>'
+            f'  </div>'
+            f'  <div class="poi-actions">'
+            f'    <a class="poi-btn poi-btn-map" href="{uri_marker}" target="_blank">📍 地图</a>'
+            f'    <a class="poi-btn poi-btn-nav" href="{uri_nav}" target="_blank">🧭 导航</a>'
+            f'  </div>'
+            f'</div>'
+        )
+    return f'<div class="poi-list">{chr(10).join(cards)}</div>'
 
 
 def extract_points(mall_results: str = "", hotel_results: str = "",
@@ -132,11 +163,16 @@ def _build_static_html(points: list[dict]) -> str:
         img_tag = f'<img src="{data_uri}" alt="地图" />'
     except Exception as e:
         img_tag = f'<div class="map-error">静态地图加载失败：{str(e)[:120]}</div>'
+    poi_list = _build_poi_list_html(points)
     return f"""
     <div class="map-wrap static-map">
       {img_tag}
       <div class="map-tip">{tip}　如需交互地图可配置高德 JS Key</div>
       {_legend_html()}
+    </div>
+    <div class="poi-section">
+      <div class="poi-section-title">📍 点击卡片查看详情 · 🧭 导航前往</div>
+      {poi_list}
     </div>
     """
 
@@ -151,16 +187,23 @@ def _build_js_html(points: list[dict]) -> str:
                 "color": CATEGORY_COLORS.get(p["category"], "#999"),
                 "address": p["address"],
                 "label": CATEGORY_LABELS.get(p["category"], ""),
+                "navUrl": f"https://uri.amap.com/navigation?to={p['lng']},{p['lat']}&toname={p['name'].replace(' ', '+')}&mode=transit",
+                "markerUrl": f"https://uri.amap.com/marker?position={p['lng']},{p['lat']}&name={p['name'].replace(' ', '+')}",
             }
             for p in points[:JS_LIMIT]
         ],
         ensure_ascii=False,
     )
+    poi_list = _build_poi_list_html(points)
     return f"""
     <div class="map-wrap">
       <div id="xiaotu-map"></div>
-      <div class="map-tip">共 {len(points)} 个结果 · 点击标记查看详情</div>
+      <div class="map-tip">共 {len(points)} 个结果 · 点击标记查看详情和导航</div>
       {_legend_html()}
+    </div>
+    <div class="poi-section">
+      <div class="poi-section-title">📍 点击卡片查看详情 · 🧭 导航前往</div>
+      {poi_list}
     </div>
     <script>
     window._AMapSecurityConfig = {{ securityJsCode: "{security}" }};
@@ -177,11 +220,16 @@ def _build_js_html(points: list[dict]) -> str:
             title: p.name
           }});
           marker.on('click', function() {{
+            var content = '<div class="amap-info"><b>' + p.name + '</b>'
+                     + '<br><span>' + (p.label || '') + '</span>'
+                     + '<br>' + (p.address || '')
+                     + '<div class="amap-info-actions">'
+                     + '<a class="amap-info-btn" href="' + p.markerUrl + '" target="_blank">📍 地图</a>'
+                     + '<a class="amap-info-btn amap-info-nav" href="' + p.navUrl + '" target="_blank">🧭 导航</a>'
+                     + '</div></div>';
             new AMap.InfoWindow({{
               offset: new AMap.Pixel(0, -36),
-              content: '<div class="amap-info"><b>' + p.name + '</b>'
-                     + '<br><span>' + (p.label || '') + '</span>'
-                     + '<br>' + (p.address || '') + '</div>'
+              content: content
             }}).open(map, [p.lng, p.lat]);
           }});
           return marker;

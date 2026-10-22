@@ -29,6 +29,8 @@ class MallAgent:
 
         messages.append(HumanMessage(content=user_input))
 
+        messages = messages[-13:]
+
         initial_state: dict = {"messages": messages}
 
         if file_paths:

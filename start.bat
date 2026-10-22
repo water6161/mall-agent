@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d g:\new
+cd /d g:\aigent
 echo ============================================
 echo  🛍️ 出行决策 Agent · 商场推荐助手
 echo  启动中...

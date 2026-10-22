@@ -1,6 +1,10 @@
 import os
+import re
 import json
 import base64
+
+import httpx
+from openai import OpenAIError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -65,6 +69,7 @@ def _get_llm():
         base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=0.3,
+        max_retries=3,
     )
 
 
@@ -77,6 +82,7 @@ def _get_vision_llm():
         base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         model=vision_model,
         temperature=0.3,
+        max_retries=3,
     )
 
 
@@ -103,8 +109,25 @@ def _no_key_reply() -> str:
     )
 
 
-def _fallback_reply() -> str:
-    return "😵‍💫 AI 暂时短路了... 请检查 API Key 是否正确，或者稍后再试一次。"
+def _status_code(exc: Exception) -> int | None:
+    """从异常中提取 HTTP 状态码（兼容 httpx 与 openai 的异常结构）。"""
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None)
+    if not isinstance(code, int):
+        code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    match = re.search(r"(?:Error code|status_code)[:\s]*(\d{3})", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _error_reply(exc: Exception) -> str:
+    code = _status_code(exc)
+    if code == 429:
+        return "请求太频繁，请稍后再试。"
+    if code == 401:
+        return "API Key 无效，请检查 OPENAI_API_KEY 配置。"
+    return f"😵‍💫 调用模型失败：{exc}"
 
 
 # ─── image ──────────────────────────────────────────────────
@@ -127,7 +150,7 @@ def analyze_image(state: AgentState) -> AgentState:
         resp = vision_llm.invoke([human_msg])
         desc = resp.content if isinstance(resp.content, str) else str(resp.content)
         return {"image_desc": desc}
-    except Exception:
+    except (httpx.HTTPError, OSError, ValueError):
         return {"image_desc": None}
 
 
@@ -208,10 +231,10 @@ def understand_intent(state: AgentState) -> AgentState:
             "needs": needs,
             "final_response": None,
         }
-    except Exception:
+    except (httpx.HTTPError, OpenAIError, ValueError) as e:
         return {
             "user_intent": "unknown",
-            "final_response": _fallback_reply(),
+            "final_response": _error_reply(e),
         }
 
 
@@ -220,7 +243,7 @@ def understand_intent(state: AgentState) -> AgentState:
 def _run_tool(tool, **kwargs) -> str:
     try:
         return tool.invoke(kwargs)
-    except Exception as e:
+    except (httpx.HTTPError, json.JSONDecodeError) as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
@@ -362,8 +385,8 @@ def generate_recommend(state: AgentState) -> AgentState:
 
 {style_instruction}"""
                 reply = llm.invoke([HumanMessage(content=prompt)]).content
-        except Exception:
-            reply = _fallback_reply()
+        except (httpx.HTTPError, OpenAIError, ValueError) as e:
+            reply = _error_reply(e)
 
     return {"messages": [AIMessage(content=reply)], "final_response": reply}
 
@@ -384,8 +407,8 @@ def direct_reply(state: AgentState) -> AgentState:
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=last_msg),
             ]).content
-        except Exception:
-            reply = _fallback_reply()
+        except (httpx.HTTPError, OpenAIError, ValueError) as e:
+            reply = _error_reply(e)
 
     return {"messages": [AIMessage(content=reply)], "final_response": reply}
 
@@ -433,7 +456,7 @@ def photo_edit(state: AgentState) -> AgentState:
             f"![AI修图结果]({data_uri})\n\n"
             "想继续调风格、换背景或改细节，直接告诉我！"
         )
-    except Exception as e:
+    except (httpx.HTTPError, OSError, ValueError, ImportError, ImageEditError) as e:
         reply = f"😣 修图失败了：{str(e)[:200]}\n\n可以换张图或稍后再试～"
 
     return {"messages": [AIMessage(content=reply)], "final_response": reply}
