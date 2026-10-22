@@ -10,6 +10,7 @@ POST /mall-agent
 import os
 import sys
 import json
+import inspect
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -40,20 +41,48 @@ def _context_env(context) -> dict:
     return {n: getattr(env, n) for n in names if getattr(env, n, None)}
 
 
+def _parse_payload(payload) -> dict:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8", "ignore")
+    if isinstance(payload, str) and payload.strip():
+        try:
+            data = json.loads(payload)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 async def _read_body(request) -> dict:
+    """兼容平台注入的 request：dict / .json() / .body(属性或方法) 三种形态。"""
     if request is None:
         return {}
-    try:
-        data = await request.json()
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        pass
-    try:
-        raw = await request.text()
-        data = json.loads(raw or "{}")
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+
+    for name in ("json", "body", "data", "payload"):
+        value = getattr(request, name, None)
+        if value is None:
+            continue
+        if callable(value):
+            if name not in ("json", "body"):
+                continue
+            try:
+                parsed = _parse_payload(await _maybe_await(value()))
+            except Exception:
+                continue
+        else:
+            parsed = _parse_payload(value)
+        if parsed:
+            return parsed
+
+    return _parse_payload(request)
 
 
 async def handler(context):
