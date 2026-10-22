@@ -21,10 +21,10 @@ with open(os.path.join(BASE, "main.js"), encoding="utf-8") as f:
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
 EXAMPLES = [
+    ("上传一张景点照片，帮我认认是哪儿", "📷"),
     ("周末去深圳玩两天，帮我规划下", "✈️"),
     ("北京有什么好逛的商场？我喜欢高端品牌", "💎"),
     ("上海外滩附近性价比高的酒店推荐", "🏨"),
-    ("深圳北站到万象天地怎么坐地铁？", "🚇"),
 ]
 
 
@@ -118,9 +118,6 @@ def _build_map_section(points):
 
 
 def respond(user_input: str, history, uploaded_files, uploaded_image, session_id: str):
-    if not user_input.strip():
-        return user_input, history, session_id, "", gr.update(), gr.update()
-
     file_paths = _normalize_files(uploaded_files) if uploaded_files else None
     image_path = None
     if uploaded_image:
@@ -128,6 +125,12 @@ def respond(user_input: str, history, uploaded_files, uploaded_image, session_id
             image_path = uploaded_image
         elif hasattr(uploaded_image, "name"):
             image_path = uploaded_image.name
+
+    if not user_input.strip() and not image_path:
+        return user_input, history, session_id, "", gr.update(), gr.update()
+
+    if image_path and not user_input.strip():
+        user_input = "这张照片里是哪个景点？帮我看看"
 
     try:
         a = MallAgent()
@@ -261,7 +264,7 @@ with gr.Blocks(title="小水 · 全能出行决策助手", css=CSS, js=JS) as de
             gr.HTML('<div class="sidebar-section-title">工具</div>')
             with gr.Row(elem_id="sidebar-tools"):
                 attach_btn = gr.Button("📎 附件", scale=1, size="sm")
-                image_btn = gr.Button("🖼️ 图片", scale=1, size="sm")
+                image_btn = gr.Button("📷 识景点", scale=1, size="sm")
 
         with gr.Column(scale=1, elem_id="main-content"):
 
@@ -298,7 +301,7 @@ with gr.Blocks(title="小水 · 全能出行决策助手", css=CSS, js=JS) as de
 
                     msg = gr.Textbox(
                         show_label=False,
-                        placeholder="问问附近有什么商场，或告诉我你喜欢什么风格～",
+                        placeholder="问问附近有什么商场，或上传一张景点照片让我认认～",
                         lines=3,
                         max_lines=8,
                         elem_id="msg-input",

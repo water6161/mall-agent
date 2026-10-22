@@ -7,6 +7,7 @@ __pycache__/
 venv/
 *.log
 _gradio.log
+logs/
 
 # 本地数据与生成产物，不上传仓库
 data/*.db

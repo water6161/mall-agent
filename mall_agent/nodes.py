@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import base64
 
 import httpx
 from openai import OpenAIError
@@ -14,6 +13,7 @@ from langchain_openai import ChatOpenAI
 
 from .state import AgentState
 from .tools.amap import ALL_TOOLS, search_nearby_malls, search_hotels, search_sightseeing, plan_route
+from .tools.spot_recognition import recognize_spot, SpotRecognitionError
 
 
 SYSTEM_PROMPT = """你是一个全能出行决策助手，名叫"小水"。用户会向你咨询各种出行相关的问题，你需要判断用户意图，调用合适的工具获取数据，最后给出清晰、实用的建议。
@@ -23,7 +23,7 @@ SYSTEM_PROMPT = """你是一个全能出行决策助手，名叫"小水"。用�
 2. hotel       —— 找酒店、住宿、性价比筛选
 3. sightseeing —— 找景点、旅游目的地、游玩攻略
 4. route       —— 路线规划、怎么坐车/打车、交通方案
-5. photo_edit  —— AI修图（已上线真实能力）：用户上传照片后，美化调色、换背景、去杂物、生成旅行打卡效果图
+5. spot        —— 图片识别景点：用户上传一张照片，认出是哪个景点/地标，并给出游玩建议
 6. chat        —— 闲聊、打招呼、问你叫什么
 7. discover    —— 用户只说了一个城市/地名、没说要干什么时，主动帮他发现：商场+景点+酒店一起种草推荐
 
@@ -51,7 +51,7 @@ INTENT_ROUTE_MAP = {
     "hotel": "search_hotels",
     "sightseeing": "search_sights",
     "route": "search_route",
-    "photo_edit": "photo_edit",
+    "spot": "spot_recognize",
     "chat": "direct_reply",
     "unknown": "direct_reply",
     "discover": "search_multi",
@@ -71,31 +71,6 @@ def _get_llm():
         temperature=0.3,
         max_retries=3,
     )
-
-
-def _get_vision_llm():
-    vision_model = os.getenv("VISION_MODEL", "")
-    if not vision_model:
-        return None
-    return ChatOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        model=vision_model,
-        temperature=0.3,
-        max_retries=3,
-    )
-
-
-def _encode_image(image_path: str) -> str:
-    ext = os.path.splitext(image_path)[1].lower()
-    mime = {
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".png": "image/png", ".gif": "image/gif",
-        ".webp": "image/webp", ".bmp": "image/bmp",
-    }.get(ext, "image/jpeg")
-    with open(image_path, "rb") as f:
-        data = base64.b64encode(f.read()).decode()
-    return f"data:{mime};base64,{data}"
 
 
 def _no_key_reply() -> str:
@@ -132,26 +107,48 @@ def _error_reply(exc: Exception) -> str:
 
 # ─── image ──────────────────────────────────────────────────
 
-def analyze_image(state: AgentState) -> AgentState:
+def spot_recognize(state: AgentState) -> AgentState:
+    """上传照片 → 识别景点 → 用高德补全信息 → 交给推荐节点。"""
     image_path = state.get("user_image")
-    if not image_path or not _is_key_configured():
-        return {}
+    if not image_path:
+        reply = (
+            "📷 想让我认景点的话，先上传一张照片～\n"
+            "点输入框下方的「图片」按钮选张风景照，我就能告诉你这是哪儿。"
+        )
+        return {"messages": [AIMessage(content=reply)], "final_response": reply}
 
-    vision_llm = _get_vision_llm()
-    if not vision_llm:
-        return {"image_desc": None}
+    if not _is_key_configured():
+        return {"messages": [AIMessage(content=_no_key_reply())], "final_response": _no_key_reply()}
 
     try:
-        img_data = _encode_image(image_path)
-        human_msg = HumanMessage(content=[
-            {"type": "text", "text": "请描述这张图片的内容，特别关注：是否有商场/品牌标志/购物相关场景？用中文简洁描述。"},
-            {"type": "image_url", "image_url": {"url": img_data}},
-        ])
-        resp = vision_llm.invoke([human_msg])
-        desc = resp.content if isinstance(resp.content, str) else str(resp.content)
-        return {"image_desc": desc}
-    except (httpx.HTTPError, OSError, ValueError):
-        return {"image_desc": None}
+        info = recognize_spot(image_path)
+    except (SpotRecognitionError, httpx.HTTPError, OSError, ValueError) as e:
+        reply = f"😵‍💫 图片识别失败：{str(e)[:200]}\n\n换张清晰点的照片再试试～"
+        return {"messages": [AIMessage(content=reply)], "final_response": reply}
+
+    if not info.get("found") or not info.get("name"):
+        reply = (
+            "🔍 这张图里没认出明显的景点或地标。\n"
+            "试着传一张包含建筑、雕像、山水地标等特征的清晰照片吧～"
+        )
+        return {"messages": [AIMessage(content=reply)], "final_response": reply}
+
+    name = info["name"]
+    city = info.get("city") or state.get("user_location") or ""
+
+    result = _run_tool(search_sightseeing, city=city, keyword=name) if city else ""
+    desc = info.get("description") or ""
+    image_desc = f"识别到的景点：{name}（{city or '城市未知'}）｜{info.get('landmark_type') or ''}｜{desc}"
+
+    return {
+        "user_intent": "sightseeing",
+        "user_location": city or None,
+        "user_preference": name,
+        "needs": ["sightseeing"],
+        "sight_results": result,
+        "image_desc": image_desc,
+        "final_response": None,
+    }
 
 
 # ─── intent ─────────────────────────────────────────────────
@@ -181,7 +178,7 @@ def understand_intent(state: AgentState) -> AgentState:
 
         json_schema = """
 {
-  "intent": "shopping|hotel|sightseeing|route|photo_edit|chat|discover",
+  "intent": "shopping|hotel|sightseeing|route|spot|chat|discover",
   "city": "提取的城市名，没有则为 null。注意：如果用户只发了一个城市/地名（比如"深圳"、"杭州"），intent 必须为 discover，city 填该地名",
   "destination": "目的地城市(比如旅游目标城市)，没有则为 null",
   "route_from": "路线起点，没有则为 null",
@@ -218,7 +215,7 @@ def understand_intent(state: AgentState) -> AgentState:
         needs = data.get("needs") or []
         if intent == "discover":
             needs = ["shopping", "sightseeing", "hotel"]
-        elif not needs and intent not in ("chat", "photo_edit"):
+        elif not needs and intent not in ("chat", "spot"):
             needs = [intent]
 
         return {
@@ -466,7 +463,7 @@ def photo_edit(state: AgentState) -> AgentState:
 
 def route_after_image(state: AgentState) -> str:
     if state.get("user_image"):
-        return "analyze_image"
+        return "spot_recognize"
     return "understand_intent"
 
 
@@ -477,9 +474,6 @@ def route_after_intent(state: AgentState) -> str:
     intent = state.get("user_intent", "chat")
     needs = state.get("needs") or [intent]
     city = state.get("user_location") or state.get("user_destination")
-
-    if intent == "photo_edit":
-        return "photo_edit"
 
     if intent == "chat" or intent == "unknown":
         return "direct_reply"

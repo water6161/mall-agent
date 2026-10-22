@@ -2,10 +2,9 @@ from langgraph.graph import StateGraph, START, END
 
 from .state import AgentState
 from .nodes import (
-    analyze_image,
+    spot_recognize,
     understand_intent,
     direct_reply,
-    photo_edit,
     search_malls,
     search_hotels_node,
     search_sights,
@@ -20,10 +19,9 @@ from .nodes import (
 def build_graph():
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("analyze_image", analyze_image)
+    workflow.add_node("spot_recognize", spot_recognize)
     workflow.add_node("understand_intent", understand_intent)
     workflow.add_node("direct_reply", direct_reply)
-    workflow.add_node("photo_edit", photo_edit)
     workflow.add_node("search_malls", search_malls)
     workflow.add_node("search_hotels", search_hotels_node)
     workflow.add_node("search_sights", search_sights)
@@ -35,11 +33,11 @@ def build_graph():
         START,
         route_after_image,
         {
-            "analyze_image": "analyze_image",
+            "spot_recognize": "spot_recognize",
             "understand_intent": "understand_intent",
         },
     )
-    workflow.add_edge("analyze_image", "understand_intent")
+    workflow.add_edge("spot_recognize", "generate_recommend")
 
     workflow.add_conditional_edges(
         "understand_intent",
@@ -51,7 +49,6 @@ def build_graph():
             "search_route": "search_route",
             "search_multi": "search_multi",
             "direct_reply": "direct_reply",
-            "photo_edit": "photo_edit",
             "generate_recommend": "generate_recommend",
         },
     )
@@ -60,7 +57,6 @@ def build_graph():
         workflow.add_edge(node, "generate_recommend")
 
     workflow.add_edge("direct_reply", END)
-    workflow.add_edge("photo_edit", END)
     workflow.add_edge("generate_recommend", END)
 
     return workflow.compile()
