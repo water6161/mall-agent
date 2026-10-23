@@ -58,11 +58,12 @@ TYPE_KEYWORDS = {
 
 INTENT_PROMPT = """你是"小水"，一个出行决策助手。判断用户这句话的意图，严格输出 JSON，不要输出任何其他文字：
 {
-  "intent": "shopping|hotel|sightseeing|plan|spot|chat|discover",
+  "intent": "shopping|hotel|sightseeing|plan|spot|chat|discover|buy",
   "city": "城市名，没有则为 null；只说了城市名（如"深圳"）时 intent 填 discover",
-  "preference": "偏好关键词，如 高端/亲子/性价比，没有则为 null"
+  "preference": "偏好关键词，如 高端/亲子/性价比，没有则为 null",
+  "budget": "预算金额（数字，元），没提到则为 null"
 }
-规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover。"""
+规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover，想买某样东西/求选购建议（如"我想买个相机5000以内"）=buy。"""
 
 REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工具查到的真实地点数据，用口语化中文回答用户，像朋友推荐一样。
 
@@ -73,6 +74,35 @@ REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工
 - 控制在 260 字以内，可以用少量条目列表
 - 如果数据明显不匹配用户需求，就直说没找到合适的，并建议换个关键词
 - 不要用机械的开场白"""
+
+BUY_PROMPT = """你是"小水"，一个懂行的购物顾问。
+
+用户需求：{need}
+城市：{city}
+附近能买到的地方（名称 | 类型 | 地址 | 评分）：
+{poi}
+
+要求：
+- 先给 2-3 条**选购要点**（怎么挑、看什么参数、避什么坑），要具体实用，不要空话
+- 再推荐上面数据里出现过的 2-3 个购买地点，说明为什么去那里（只写数据里有的信息，绝不编造地址/评分）
+- 如果用户给了预算，结合预算给建议
+- 不要编造具体商品价格、品牌型号报价
+- 控制在 300 字以内，用列表输出"""
+
+PRODUCT_PROMPT = """识别这张照片里的商品。严格输出 JSON，不要输出其他文字：
+{
+  "is_product": true/false,
+  "name": "商品名称（尽量具体，含品牌和型号），认不出则为 null",
+  "category": "商品类别，如 数码/服饰/家电/美妆/食品",
+  "price_range": "大致市场价位区间，如 3000-4000元，不确定则为 null",
+  "keywords": "用于搜索门店的关键词，如 数码城、Apple授权店",
+  "tips": "一条最实用的选购/辨别要点，40字以内"
+}
+画面里如果是景点、地标、风景、人物，is_product 填 false。"""
+
+SPOT_FOLLOWUP = "\n\n---\n要我接着帮你查这附近的美食、酒店，或者把这个景点安排进行程吗？说一声就行～"
+
+PRODUCT_FOLLOWUP = "\n\n---\n要我把这个加入购物清单，或者帮你查附近哪里买更划算吗？"
 
 PLAN_PROMPT = """你是"小水"，一个贴心的出行规划师。用户想要一份行程安排，只能使用下面给出的真实地点数据来规划，绝不编造数据之外的地点。
 
@@ -416,6 +446,168 @@ def recognize_spot(env: dict, image_data_uri: str) -> dict:
     }
 
 
+# ─── 商品识别 ───────────────────────────────────────────────
+
+def recognize_product(env: dict, image_data_uri: str) -> dict:
+    body = {
+        "model": env["vision_model"],
+        "temperature": 0.1,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": PRODUCT_PROMPT},
+                {"type": "image_url", "image_url": {"url": image_data_uri}},
+            ],
+        }],
+    }
+    status, text = _post_json(
+        env["vision_base_url"] + "/chat/completions", body,
+        {"Authorization": f"Bearer {env['vision_api_key']}",
+         "Content-Type": "application/json"}, 90)
+    if status != 200:
+        raise RuntimeError(f"视觉模型返回 {status}：{text[:160]}")
+    choices = json.loads(text).get("choices") or []
+    content = choices[0].get("message", {}).get("content", "") if choices else ""
+    if isinstance(content, list):
+        content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+    data = _parse_json(content)
+    return {
+        "is_product": bool(data.get("is_product")) and bool(data.get("name")),
+        "name": data.get("name") or None,
+        "category": data.get("category") or "",
+        "price_range": data.get("price_range") or "",
+        "keywords": data.get("keywords") or "数码城",
+        "tips": data.get("tips") or "",
+    }
+
+
+def _run_image(env: dict, image: str, city_hint: str = "") -> dict:
+    """图片入口：先判断是商品还是景点，分别处理。"""
+    try:
+        spot = recognize_spot(env, image)
+    except Exception as e:
+        err = str(e)
+        if "402" in err or "quota" in err.lower() or "insufficient" in err.lower():
+            return {"reply": "😵‍💫 图片识别失败了：视觉模型额度不足（402）。\n\n"
+                             "去充值或确认 VISION_MODEL 对应模型有可用额度后再试～", "points": []}
+        if "401" in err or "403" in err:
+            return {"reply": "😵‍💫 图片识别失败了：视觉模型鉴权失败（401/403）。\n\n"
+                             "请检查 VISION_API_KEY 是否正确、模型是否有权限。", "points": []}
+        return {"reply": f"😵‍💫 图片识别失败了：{err[:160]}\n\n换张清晰点的照片再试试～",
+                "points": []}
+
+    # 景点优先
+    if spot["found"]:
+        return _spot_result(env, spot)
+
+    # 再试商品识别
+    try:
+        prod = recognize_product(env, image)
+    except Exception:
+        prod = {"is_product": False}
+
+    if prod.get("is_product"):
+        return _product_result(env, prod, city_hint)
+
+    return {"reply": "🔍 这张图里没认出明显的景点或商品。\n"
+                     "换一张有建筑地标、或清晰商品主体的照片试试～", "points": []}
+
+
+def _product_result(env: dict, prod: dict, city_hint: str = "") -> dict:
+    city = city_hint or ""
+    kw = prod.get("keywords") or "数码城"
+    pois = _amap_search(env, city, kw, limit=6) if city else []
+    if not pois and city:
+        pois = _amap_search(env, city, "购物中心", limit=6)
+    points = [dict(p, category="shopping") for p in pois]
+
+    info = (f"商品：{prod['name']}｜类别：{prod.get('category') or '未知'}｜"
+            f"大致价位：{prod.get('price_range') or '未知'}\n"
+            f"选购要点：{prod.get('tips') or '无'}")
+    prompt = (f"用户拍了张商品照片，识别结果：\n{info}\n\n"
+              f"附近能买到的地方：\n{_poi_digest(points) or '（无数据）'}\n\n"
+              f"请告诉用户这是什么商品、大概什么价位、有什么选购要点，"
+              f"如果数据里有可购买的门店就顺带推荐 1-2 个。不要编造具体报价。")
+    try:
+        reply = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
+                            {"role": "user", "content": prompt}])
+    except Exception:
+        reply = (f"🛍️ 认出来了：**{prod['name']}**（{prod.get('category') or '商品'}）\n"
+                 f"大致价位：{prod.get('price_range') or '未知'}\n"
+                 f"选购提醒：{prod.get('tips') or '—'}")
+
+    return {"reply": reply + PRODUCT_FOLLOWUP, "points": points[:10],
+            "product": prod, "map_image": ""}
+
+
+# ─── 购物导购 ───────────────────────────────────────────────
+
+def _run_buy(env: dict, message: str, city: str, budget=None) -> dict:
+    if not city:
+        return {"reply": "想在哪座城市买呀？告诉我城市名，我帮你查附近哪里能买到、买得划算～",
+                "points": []}
+    if not env.get("amap_key"):
+        return {"reply": "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你查门店。",
+                "points": []}
+
+    points = []
+    for kw in ("购物中心", "数码城", "电器"):
+        raw = _amap_search(env, city, kw, limit=6)
+        for poi in raw[:4]:
+            points.append(dict(poi, category="shopping"))
+        if len(points) >= 8:
+            break
+
+    if not points:
+        return {"reply": f"在「{city}」暂时没查到相关购物门店，换个城市或关键词试试～",
+                "points": []}
+
+    need = message + (f"（预算约 {budget} 元）" if budget else "")
+    prompt = BUY_PROMPT.replace("{need}", need).replace("{city}", city) \
+                        .replace("{poi}", _poi_digest(points))
+    try:
+        reply = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
+                            {"role": "user", "content": prompt}], temperature=0.4)
+    except Exception as e:
+        names = "、".join(p["name"] for p in points[:5])
+        reply = f"给你找到 {city} 这些能买到的地方：{names}\n（详细建议没生成成功：{str(e)[:80]}）"
+
+    return {"reply": reply, "points": points[:12], "map_image": "",
+            "shopping": True, "city": city}
+
+
+def _spot_result(env: dict, spot: dict) -> dict:
+    city = spot.get("city") or ""
+    pois = _amap_search(env, city, spot["name"], limit=6) if city else []
+    points = [dict(p, category="sightseeing") for p in _filter_pois(pois, "sightseeing")]
+
+    context = _poi_digest(points)
+    prompt = (
+        f"用户上传了一张照片，识别结果：{spot['name']}（{city or '城市未知'}），"
+        f"类型 {spot.get('landmark_type') or '未知'}，画面特征：{spot.get('description') or ''}。\n"
+        f"高德查到的相关信息：\n{context or '（无）'}\n\n"
+        f"请告诉用户这是哪儿，并给出实用游玩建议（开放时间/门票等没查到的不要编）。"
+        f"如果高德数据里有同城其他相关景点，可以顺带推荐 1-2 个。"
+    )
+    try:
+        reply = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
+                            {"role": "user", "content": prompt}])
+    except Exception as e:
+        reply = f"认出来了：{spot['name']}（{city or '城市未知'}）" \
+                f"｜{spot.get('landmark_type') or ''}｜{spot.get('description') or ''}\n" \
+                f"（后续推荐没生成成功：{str(e)[:80]}）"
+
+    weather = _weather_line(env, city,
+                            points[0].get("lat") if points else None,
+                            points[0].get("lng") if points else None)
+    if weather:
+        reply += f"\n\n🌤️ 顺带提醒：{city} {weather}，出行注意天气～"
+
+    return {"reply": reply + SPOT_FOLLOWUP,
+            "points": [p for p in points if p.get("lng")],
+            "map_image": "", "spot": spot}
+
+
 # ─── 主流程 ─────────────────────────────────────────────────
 
 def _history_messages(history: list | None) -> list:
@@ -445,64 +637,9 @@ def run(env: dict, message: str, history: list | None = None,
             "points": [],
         }
 
-    # 1) 上传图片 → 识景点 → 高德补全 → 推荐
+    # 1) 上传图片 → 先判景点，再判商品
     if image:
-        try:
-            spot = recognize_spot(env, image)
-        except Exception as e:
-            err = str(e)
-            # 402 / 额度不足：模型网关没余额了，不是照片问题
-            if "402" in err or "quota" in err.lower() or "insufficient" in err.lower():
-                reply = (
-                    "😵‍💫 图片识别失败了：视觉模型额度不足（402）。\n\n"
-                    "这不是照片的问题，是你的大模型网关（百炼/Makers）账户余额不够了，"
-                    "去充值或确认 VISION_MODEL 对应的模型有可用额度后再试～"
-                )
-            elif "401" in err or "403" in err:
-                reply = (
-                    "😵‍💫 图片识别失败了：视觉模型鉴权失败（401/403）。\n\n"
-                    "请检查 API Key 是否正确、VISION_MODEL 这个模型你是否有权限调用。"
-                )
-            else:
-                reply = f"😵‍💫 图片识别失败了：{err[:160]}\n\n换张清晰点的照片再试试～"
-            return {"reply": reply, "points": []}
-
-        if not spot["found"]:
-            return {"reply": "🔍 这张图里没认出明显的景点或地标。\n"
-                             "换一张有建筑、雕像、山水地标特征的清晰照片试试～", "points": []}
-
-        city = spot.get("city") or ""
-        pois = _amap_search(env, city, spot["name"], limit=6) if city else []
-        points = [dict(p, category="sightseeing") for p in _filter_pois(pois, "sightseeing")]
-
-        context = _poi_digest(points)
-        prompt = (
-            f"用户上传了一张照片，识别结果：{spot['name']}（{city or '城市未知'}），"
-            f"类型 {spot.get('landmark_type') or '未知'}，画面特征：{spot.get('description') or ''}。\n"
-            f"高德查到的相关信息：\n{context or '（无）'}\n\n"
-            f"请告诉用户这是哪儿，并给出实用游玩建议（开放时间/门票等没查到的不要编）。"
-            f"如果高德数据里有同城其他相关景点，可以顺带推荐 1-2 个。"
-        )
-        try:
-            reply = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
-                                {"role": "user", "content": prompt}])
-        except Exception as e:
-            reply = f"认出来了：{spot['name']}（{city or '城市未知'}）" \
-                    f"｜{spot.get('landmark_type') or ''}｜{spot.get('description') or ''}\n" \
-                    f"（后续推荐没生成成功：{str(e)[:80]}）"
-
-        weather = _weather_line(env, city,
-                                points[0].get("lat") if points else None,
-                                points[0].get("lng") if points else None)
-        if weather:
-            reply += f"\n\n🌤️ 顺带提醒：{city} {weather}，出行注意天气～"
-
-        return {
-            "reply": reply + SPOT_FOLLOWUP,
-            "points": [p for p in points if p.get("lng")],
-            "map_image": "",
-            "spot": spot,
-        }
+        return _run_image(env, image)
 
     if not message:
         return {"reply": "在的～想找商场、酒店、景点，还是发张照片让我认认是哪儿？", "points": []}
@@ -530,6 +667,9 @@ def run(env: dict, message: str, history: list | None = None,
 
     if intent in ("plan", "route"):
         return _run_plan(env, message, city, preference)
+
+    if intent == "buy":
+        return _run_buy(env, message, city, data.get("budget"))
 
     # 3) 按意图查高德
     if intent == "discover":

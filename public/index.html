@@ -667,6 +667,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
 		}
 	}
 
+
+.side-title { display: flex; align-items: center; gap: 6px; }
+.list-add {
+  margin-left: auto; border: none; background: transparent;
+  color: var(--brand); font-size: 15px; cursor: pointer;
+  padding: 0 4px; border-radius: 4px;
+}
+.list-add:hover { background: rgba(74,140,255,.1); }
+.list-item .check { font-size: 12px; }
+.list-item.done .list-text { text-decoration: line-through; color: var(--text-dim); }
+.list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+
 </style>
 <style>
 :root {
@@ -1079,6 +1091,8 @@ html, body {
   <aside class="sidebar" id="sidebar">
     <div class="logo">🧳 <span>小水</span></div>
     <button class="new-chat" id="newChat">＋ 新对话</button>
+    <div class="side-title">🛒 购物清单 <button class="list-add" id="listAdd" title="添加">＋</button></div>
+    <div class="history" id="listList"></div>
     <div class="side-title">我的收藏</div>
     <div class="history" id="favList"></div>
     <div class="side-title">最近对话</div>
@@ -1102,6 +1116,8 @@ html, body {
           <button class="example" data-text="北京有什么好逛的商场？我喜欢高端品牌">💎 北京有什么好逛的商场？</button>
           <button class="example" data-text="上海外滩附近性价比高的酒店推荐">🏨 上海外滩附近性价比酒店</button>
           <button class="example" data-text="成都两天怎么玩？帮我推荐景点">✈️ 成都两天怎么玩？</button>
+        <button class="example" data-text="我想买个相机，5000以内，帮我推荐去哪买">🛍️ 想买个相机，5000以内</button>
+          <button class="example" data-text="我想买个相机，5000以内，帮我推荐去哪买">🛍️ 想买个相机，5000以内</button>
           <button class="example" id="examplePhoto">📷 上传照片，帮我认认这是哪儿</button>
         </div>
       </div>
@@ -1646,6 +1662,7 @@ html, body {
         <button class="example" data-text="北京有什么好逛的商场？我喜欢高端品牌">💎 北京有什么好逛的商场？</button>
         <button class="example" data-text="上海外滩附近性价比高的酒店推荐">🏨 上海外滩附近性价比酒店</button>
         <button class="example" data-text="成都两天怎么玩？帮我推荐景点">✈️ 成都两天怎么玩？</button>
+        <button class="example" data-text="我想买个相机，5000以内，帮我推荐去哪买">🛍️ 想买个相机，5000以内</button>
         <button class="example" data-text="帮我安排北京一日游行程">🗓️ 帮我安排北京一日游</button>
         <button class="example" data-photo="1">📷 上传照片，帮我认认这是哪儿</button>
       </div>`;
@@ -1862,8 +1879,65 @@ html, body {
     if (e.key === 'Escape' && !mapPanel.classList.contains('hidden')) toggleMapPanel(false);
   });
 
+
+  /* ── 购物清单 ─────────────────────────── */
+  const LS_LIST = 'xs_shopping';
+  const listList = $('listList');
+
+  function loadList() {
+    try { return JSON.parse(localStorage.getItem(LS_LIST) || '[]'); }
+    catch { return []; }
+  }
+
+  function saveList(items) {
+    localStorage.setItem(LS_LIST, JSON.stringify(items.slice(0, 100)));
+    renderList();
+  }
+
+  function addToList(text) {
+    const t = (text || '').trim();
+    if (!t) return;
+    const items = loadList();
+    items.unshift({ id: Date.now() + Math.random(), text: t.slice(0, 80), done: false });
+    saveList(items);
+  }
+
+  function renderList() {
+    const items = loadList();
+    if (!items.length) {
+      listList.innerHTML = '<div class="history-empty">点 ＋ 添加要买的东西</div>';
+      return;
+    }
+    listList.innerHTML = items.map((it) => `
+      <div class="history-item list-item ${it.done ? 'done' : ''}" data-id="${it.id}">
+        <span class="check">${it.done ? '✅' : '⬜'}</span>
+        <span class="list-text">${escapeHtml(it.text)}</span>
+        <button class="fav-del" data-id="${it.id}" title="删除">✕</button>
+      </div>`).join('');
+    listList.querySelectorAll('.list-item').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.fav-del')) return;
+        const items = loadList();
+        const it = items.find((x) => String(x.id) === el.dataset.id);
+        if (it) { it.done = !it.done; saveList(items); }
+      });
+    });
+    listList.querySelectorAll('.fav-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        saveList(loadList().filter((x) => String(x.id) !== el.dataset.id));
+      });
+    });
+  }
+
+  $('listAdd').addEventListener('click', () => {
+    const v = prompt('要买什么？');
+    if (v) addToList(v);
+  });
+
   renderHistory();
   renderFavs();
+  renderList();
   bindWelcome();
   inputEl.focus();
 })();
