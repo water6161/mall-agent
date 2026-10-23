@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>小水 · 全能出行决策助手</title>
+<link rel="stylesheet" href="./vendor/leaflet.css" />
 <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -57,11 +58,17 @@
       <button class="icon-btn" id="mapClose" title="收起">✕</button>
     </div>
     <div class="map-body" id="mapBody">
-      <div class="map-empty">发送消息后，查询到的地点会在这里展示 🌍</div>
+      <div class="map-canvas-wrap" id="mapCanvasWrap" hidden>
+        <div class="map-canvas" id="mapCanvas"></div>
+      </div>
+      <div class="map-empty" id="mapEmpty">发送消息后，查询到的地点会在这里展示 🌍</div>
+      <div class="map-count" id="mapCount" hidden></div>
+      <div class="map-list" id="mapList"></div>
     </div>
   </aside>
 
 </div>
+<script src="./vendor/leaflet.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

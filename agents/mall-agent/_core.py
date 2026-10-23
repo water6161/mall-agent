@@ -9,7 +9,6 @@
 """
 
 import json
-import base64
 import re
 
 import httpx
@@ -174,12 +173,15 @@ def _amap_search(env: dict, city: str, keyword: str, limit: int = 8) -> list:
         except ValueError:
             continue
         biz = poi.get("biz_ext") or {}
+        address = poi.get("address")
+        rating = biz.get("rating")
+        cost = biz.get("cost")
         pois.append({
             "name": poi.get("name") or "",
-            "address": poi.get("address") or "" if isinstance(poi.get("address"), str) else "",
+            "address": address if isinstance(address, str) else "",
             "type": poi.get("type") or "",
-            "rating": biz.get("rating") or "",
-            "cost": biz.get("cost") or "",
+            "rating": rating if isinstance(rating, str) and rating else "",
+            "cost": cost if isinstance(cost, str) and cost not in ("0", "0.00") else "",
             "lng": lng,
             "lat": lat,
         })
@@ -202,49 +204,6 @@ def _keyword(preference: str, category: str) -> str:
 
 def _need_more_city_reply(city_keyword: str) -> str:
     return f"你想在哪个城市找{city_keyword}呀？告诉我城市名，我马上帮你查～"
-
-
-def _static_map(env: dict, points: list) -> str:
-    """服务端取高德静态地图，转 data URI，避免前端暴露 Key / 跨域问题。"""
-    key = env.get("amap_key")
-    if not key or not points:
-        return ""
-
-    subset = points[:10]
-    color = {"shopping": "0xFF6B6B", "hotel": "0x4D96FF", "sightseeing": "0x2BB673"}
-    groups: dict[str, list] = {}
-    for p in subset:
-        groups.setdefault(p["category"], []).append(p)
-
-    labels = "ABCDEFGHIJ"
-    idx = 0
-    marker_groups = []
-    for cat, pts in groups.items():
-        locs = []
-        for p in pts:
-            prefix = f"{labels[idx]}:" if idx < len(labels) else ""
-            locs.append(f"{prefix}{p['lng']},{p['lat']}")
-            idx += 1
-        marker_groups.append(f"mid,{color.get(cat, '0x999999')}," + ";".join(locs))
-
-    center = (
-        f"{sum(p['lng'] for p in subset) / len(subset)},"
-        f"{sum(p['lat'] for p in subset) / len(subset)}"
-    )
-    url = (
-        "https://restapi.amap.com/v3/staticmap"
-        f"?key={key}&location={center}&zoom=12&size=750*300&scale=2"
-        f"&markers={'%7C'.join(marker_groups)}"
-    )
-    try:
-        r = httpx.get(url, timeout=20)
-        r.raise_for_status()
-        if not r.content:
-            return ""
-        mime = "image/png" if r.content[:4] == b"\x89PNG" else "image/jpeg"
-        return f"data:{mime};base64," + base64.b64encode(r.content).decode()
-    except Exception:
-        return ""
 
 
 def _poi_digest(points: list) -> str:
@@ -363,7 +322,7 @@ def run(env: dict, message: str, history: list | None = None,
         return {
             "reply": reply,
             "points": [p for p in points if p.get("lng")],
-            "map_image": _static_map(env, points),
+            "map_image": "",
             "spot": spot,
         }
 
@@ -437,5 +396,5 @@ def run(env: dict, message: str, history: list | None = None,
     return {
         "reply": reply,
         "points": points[:20],
-        "map_image": _static_map(env, points),
+        "map_image": "",
     }

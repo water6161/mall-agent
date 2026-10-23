@@ -14,7 +14,10 @@
   const attachPreview = $('attachPreview');
   const attachThumb = $('attachThumb');
   const mapPanel = $('mapPanel');
-  const mapBody = $('mapBody');
+  const mapCanvasWrap = $('mapCanvasWrap');
+  const mapEmpty = $('mapEmpty');
+  const mapCount = $('mapCount');
+  const mapList = $('mapList');
   const historyList = $('historyList');
 
   let state = {
@@ -22,7 +25,6 @@
     sessionId: newId(),
     messages: [],
     points: [],
-    mapImage: '',
     pendingImage: '',
     busy: false,
   };
@@ -120,37 +122,157 @@
   const CAT_COLOR = { shopping: '#FF6B6B', hotel: '#4D96FF', sightseeing: '#2BB673' };
   const CAT_LABEL = { shopping: '商场', hotel: '酒店', sightseeing: '景点' };
 
-  function renderMap(points, mapImage) {
-    state.points = points || [];
-    state.mapImage = mapImage || '';
-    if (!state.points.length) return;
+  // 高德栅格瓦片（中文注记，与高德 POI 的 GCJ-02 坐标一致，无需纠偏）
+  const TILE_URL = 'https://webrd0{s}.is.autonavi.com/appmaptile'
+    + '?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}';
 
-    const cards = state.points.slice(0, 12).map((p) => {
-      const color = CAT_COLOR[p.category] || '#999';
-      const label = CAT_LABEL[p.category] || '';
-      const name = escapeHtml(p.name || '');
-      const nameEnc = encodeURIComponent(p.name || '');
-      const addr = escapeHtml(p.address || '地址未知');
-      const marker = `https://uri.amap.com/marker?position=${p.lng},${p.lat}&name=${nameEnc}`;
-      const nav = `https://uri.amap.com/navigation?to=${p.lng},${p.lat}&toname=${nameEnc}&mode=transit`;
-      return `<div class="poi-card">
-        <div class="poi-pin" style="background:${color}">${label}</div>
-        <div class="poi-info">
-          <div class="poi-name">${name}</div>
-          <div class="poi-addr">${addr}</div>
-        </div>
-        <div class="poi-actions">
-          <a href="${marker}" target="_blank" rel="noopener">📍 地图</a>
-          <a href="${nav}" target="_blank" rel="noopener">🧭 导航</a>
+  let map = null;
+  const markerByIndex = new Map();
+  let activeIndex = -1;
+
+  function ensureMap() {
+    if (map) return map;
+    if (!window.L) return null;
+    map = L.map('mapCanvas', { zoomControl: true, attributionControl: false });
+    L.tileLayer(TILE_URL, {
+      subdomains: ['1', '2', '3', '4'],
+      minZoom: 3,
+      maxZoom: 18,
+    }).addTo(map);
+    map.setView([34.5, 108.9], 4);
+    return map;
+  }
+
+  function invalidate() {
+    if (map) map.invalidateSize();
+  }
+
+  function setActive(index) {
+    activeIndex = index;
+    mapList.querySelectorAll('.poi-card').forEach((el, i) => {
+      el.classList.toggle('active', i === index);
+    });
+    markerByIndex.forEach((marker, i) => {
+      const el = marker.getElement();
+      if (!el) return;
+      const pin = el.querySelector('.poi-marker');
+      if (pin) pin.classList.toggle('active', i === index);
+    });
+  }
+
+  function focusPoint(index) {
+    const p = state.points[index];
+    if (!p || !map) return;
+    const lat = Number(p.lat), lng = Number(p.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    setActive(index);
+    map.setView([lat, lng], 15, { animate: true });
+    const marker = markerByIndex.get(index);
+    if (marker) marker.openPopup();
+    const card = mapList.querySelectorAll('.poi-card')[index];
+    if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function buildCard(p, index) {
+    const color = CAT_COLOR[p.category] || '#8a94a6';
+    const label = CAT_LABEL[p.category] || '地点';
+    const nameEnc = encodeURIComponent(p.name || '');
+    const markerUrl = `https://uri.amap.com/marker?position=${p.lng},${p.lat}&name=${nameEnc}`;
+    const navUrl = `https://uri.amap.com/navigation?to=${p.lng},${p.lat}&toname=${nameEnc}&mode=transit`;
+    const addr = p.address || '地址未知';
+    const extra = [];
+    if (p.rating) extra.push(`★ ${p.rating}`);
+    if (p.cost) extra.push(`人均 ¥${p.cost}`);
+    const card = document.createElement('div');
+    card.className = 'poi-card';
+    card.innerHTML = `<div class="poi-pin" style="background:${color}">${label}</div>
+      <div class="poi-info">
+        <div class="poi-name">${escapeHtml(p.name || '未命名地点')}</div>
+        <div class="poi-addr">${escapeHtml(addr)}${extra.length ? ' · ' + escapeHtml(extra.join(' · ')) : ''}</div>
+        <div class="poi-links">
+          <a href="${markerUrl}" target="_blank" rel="noopener">📍 高德查看</a>
+          <a href="${navUrl}" target="_blank" rel="noopener">🧭 导航</a>
         </div>
       </div>`;
-    }).join('');
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      focusPoint(index);
+    });
+    return card;
+  }
 
-    mapBody.innerHTML = (state.mapImage
-      ? `<img class="map-img" src="${state.mapImage}" alt="位置地图" /><div class="map-tip">共 ${state.points.length} 个结果，地图展示前 ${Math.min(state.points.length, 10)} 个</div>`
-      : `<div class="map-tip">共 ${state.points.length} 个结果</div>`) + cards;
+  function resetMapPanel(text) {
+    state.points = [];
+    markerByIndex.clear();
+    activeIndex = -1;
+    if (map) map.remove();
+    map = null;
+    mapCanvasWrap.hidden = true;
+    mapList.innerHTML = '';
+    mapCount.hidden = true;
+    mapEmpty.hidden = false;
+    mapEmpty.textContent = text;
+  }
 
+  function renderMap(points) {
+    const valid = (points || []).filter((p) =>
+      Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
+    state.points = valid;
+    markerByIndex.clear();
+    activeIndex = -1;
+    mapList.innerHTML = '';
     mapPanel.classList.remove('hidden');
+
+    if (!valid.length) {
+      if (map) map.remove();
+      map = null;
+      mapCanvasWrap.hidden = true;
+      mapEmpty.hidden = false;
+      mapEmpty.textContent = '这次没有查到带坐标的地点';
+      mapCount.hidden = true;
+      return;
+    }
+
+    mapEmpty.hidden = true;
+    valid.forEach((p, i) => mapList.appendChild(buildCard(p, i)));
+    mapCount.hidden = false;
+    mapCount.textContent = `共 ${valid.length} 个地点 · 点卡片或标记可定位`;
+
+    const instance = ensureMap();
+    if (!instance) { mapCanvasWrap.hidden = true; return; }
+
+    mapCanvasWrap.hidden = false;
+    invalidate();
+
+    const pts = valid.map((p) => [Number(p.lat), Number(p.lng)]);
+    if (pts.length === 1) {
+      instance.setView(pts[0], 15);
+    } else {
+      instance.fitBounds(L.latLngBounds(pts), { padding: [26, 26], maxZoom: 15 });
+    }
+
+    valid.forEach((p, i) => {
+      const color = CAT_COLOR[p.category] || '#8a94a6';
+      const icon = L.divIcon({
+        className: 'poi-marker-wrap',
+        html: `<div class="poi-marker" style="--c:${color}">${i + 1}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+        popupAnchor: [0, -14],
+      });
+      const marker = L.marker([Number(p.lat), Number(p.lng)], { icon })
+        .addTo(instance)
+        .bindPopup(`<div class="poi-popup"><b>${escapeHtml(p.name || '未命名地点')}</b>`
+          + `<div>${escapeHtml(p.address || '地址未知')}</div></div>`);
+      marker.on('click', () => {
+        setActive(i);
+        const card = mapList.querySelectorAll('.poi-card')[i];
+        if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+      markerByIndex.set(i, marker);
+    });
+
+    requestAnimationFrame(invalidate);
   }
 
   /* ── 发送 ─────────────────────────────── */
@@ -197,7 +319,7 @@
       appendMessage('assistant', reply);
       state.messages.push({ role: 'assistant', content: reply });
 
-      if (data.points && data.points.length) renderMap(data.points, data.map_image || '');
+      if (data.points && data.points.length) renderMap(data.points);
       saveSession();
     } catch (err) {
       removeTyping();
@@ -253,8 +375,8 @@
     state.messages = s.messages || [];
     chatEl.innerHTML = '';
     state.messages.forEach((m) => appendMessage(m.role, m.content));
-    if (s.points && s.points.length) renderMap(s.points, '');
-    else { mapBody.innerHTML = '<div class="map-empty">这次对话没有位置数据</div>'; }
+    if (s.points && s.points.length) renderMap(s.points);
+    else resetMapPanel('这次对话没有位置数据');
     renderHistory();
   }
 
@@ -262,11 +384,10 @@
     state.sessionId = newId();
     state.messages = [];
     state.points = [];
-    state.mapImage = '';
     chatEl.innerHTML = '';
     chatEl.appendChild(buildWelcome());
     bindWelcome();
-    mapBody.innerHTML = '<div class="map-empty">发送消息后，查询到的地点会在这里展示 🌍</div>';
+    resetMapPanel('发送消息后，查询到的地点会在这里展示 🌍');
     renderHistory();
     inputEl.focus();
   }
@@ -372,8 +493,17 @@
 
   $('newChat').addEventListener('click', newChat);
   $('sideToggle').addEventListener('click', () => $('sidebar').classList.toggle('collapsed'));
-  $('mapToggle').addEventListener('click', () => mapPanel.classList.toggle('hidden'));
-  $('mapClose').addEventListener('click', () => mapPanel.classList.add('hidden'));
+  function toggleMapPanel(show) {
+    const shouldShow = show === undefined ? mapPanel.classList.contains('hidden') : show;
+    mapPanel.classList.toggle('hidden', !shouldShow);
+    if (shouldShow) requestAnimationFrame(invalidate);
+  }
+
+  $('mapToggle').addEventListener('click', () => toggleMapPanel());
+  $('mapClose').addEventListener('click', () => toggleMapPanel(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !mapPanel.classList.contains('hidden')) toggleMapPanel(false);
+  });
 
   renderHistory();
   bindWelcome();

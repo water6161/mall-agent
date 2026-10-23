@@ -16,3 +16,9 @@ data/*.db-journal
 generated/
 
 !start.bat
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  

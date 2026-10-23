@@ -269,10 +269,40 @@ html, body {
 }
 .map-body { flex: 1; overflow-y: auto; padding: 0 14px 18px; }
 .map-empty { color: var(--text-dim); font-size: 13px; line-height: 1.8; padding: 12px 0; }
-.map-body img.map-img {
-  width: 100%; border-radius: 12px; border: 1px solid var(--border); display: block;
+.map-count { font-size: 11.5px; color: var(--text-dim); margin: 0 0 8px; }
+
+/* 地图画布（Leaflet + 高德瓦片） */
+.map-canvas-wrap { margin-bottom: 12px; }
+.map-canvas {
+  width: 100%;
+  height: 240px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #eef4fb;
+  z-index: 0;
 }
-.map-tip { font-size: 11px; color: var(--text-dim); margin: 8px 0 12px; }
+.map-canvas .leaflet-container { font-family: inherit; }
+.poi-marker-wrap { background: transparent; border: none; }
+.poi-marker {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--c, #4a8cff);
+  color: #fff;
+  font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, .30);
+  transition: transform .15s ease, box-shadow .15s ease;
+  cursor: pointer;
+}
+.poi-marker.active {
+  transform: scale(1.28);
+  box-shadow: 0 0 0 4px rgba(74, 140, 255, .35), 0 2px 10px rgba(31, 41, 55, .32);
+}
+.leaflet-popup-content { margin: 10px 12px; font-size: 12.5px; line-height: 1.6; }
+.leaflet-popup-content b { font-size: 13px; }
+.poi-popup div { color: var(--text-dim); margin-top: 2px; }
 
 .poi-card {
   display: flex;
@@ -283,6 +313,13 @@ html, body {
   border-radius: 12px;
   padding: 10px 12px;
   margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.poi-card:hover { border-color: #b9d4f7; }
+.poi-card.active {
+  border-color: var(--brand);
+  box-shadow: 0 4px 14px rgba(74, 140, 255, .18);
 }
 .poi-pin {
   flex: 0 0 auto;
@@ -295,12 +332,12 @@ html, body {
 .poi-info { flex: 1; min-width: 0; }
 .poi-name { font-size: 13.5px; font-weight: 600; }
 .poi-addr { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
-.poi-actions { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; }
-.poi-actions a {
+.poi-links { display: flex; gap: 6px; margin-top: 7px; }
+.poi-links a {
   font-size: 11.5px; color: var(--brand); text-decoration: none;
   border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; white-space: nowrap;
 }
-.poi-actions a:hover { border-color: var(--brand); background: var(--user-bubble); }
+.poi-links a:hover { border-color: var(--brand); background: var(--user-bubble); }
 
 /* ── 移动端 ───────────────────────────── */
 @media (max-width: 960px) {
