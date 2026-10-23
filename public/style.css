@@ -363,3 +363,20 @@ html, body {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.12); }
 }
+
+/* 收藏夹 */
+.poi-card { position: relative; }
+.fav-btn {
+  position: absolute; top: 10px; right: 10px;
+  border: none; background: transparent; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 4px; border-radius: 6px;
+  transition: transform .15s ease;
+}
+.fav-btn:hover { transform: scale(1.25); background: rgba(0,0,0,.05); }
+.fav-item { display: flex; align-items: center; gap: 6px; }
+.fav-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-del {
+  border: none; background: transparent; color: #b0b8c4;
+  cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px;
+}
+.fav-del:hover { color: #ff5a5a; background: rgba(0,0,0,.06); }

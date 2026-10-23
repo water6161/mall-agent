@@ -119,6 +119,85 @@
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
+  /* ── 收藏夹 ───────────────────────────── */
+  const LS_FAVS = 'xs_favs';
+  const favList = $('favList');
+  const favKey = (p) => `${p.name || ''}|${p.lng || ''}|${p.lat || ''}`;
+
+  function loadFavs() {
+    try { return JSON.parse(localStorage.getItem(LS_FAVS) || '[]'); }
+    catch { return []; }
+  }
+
+  function saveFavs(list) {
+    localStorage.setItem(LS_FAVS, JSON.stringify(list.slice(0, 50)));
+    renderFavs();
+  }
+
+  function isFav(p) {
+    return loadFavs().some((f) => favKey(f) === favKey(p));
+  }
+
+  function toggleFav(p, btn) {
+    const list = loadFavs();
+    const k = favKey(p);
+    const idx = list.findIndex((f) => favKey(f) === k);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      if (btn) { btn.textContent = '🤍'; btn.title = '收藏'; }
+    } else {
+      list.unshift({
+        name: p.name, address: p.address, rating: p.rating,
+        lng: p.lng, lat: p.lat, category: p.category, time: Date.now(),
+      });
+      if (btn) { btn.textContent = '❤️'; btn.title = '取消收藏'; }
+    }
+    saveFavs(list);
+  }
+
+  function renderFavs() {
+    const list = loadFavs();
+    if (!list.length) {
+      favList.innerHTML = '<div class="history-empty">点地点卡片上的 🤍 收藏</div>';
+      return;
+    }
+    favList.innerHTML = list.map((f, i) => `
+      <div class="history-item fav-item" data-i="${i}">
+        <span class="dot">❤️</span>
+        <span class="fav-name">${escapeHtml(f.name || '未命名')}</span>
+        <button class="fav-del" data-i="${i}" title="删除">✕</button>
+      </div>`).join('');
+    favList.querySelectorAll('.fav-item').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.fav-del')) return;
+        const f = loadFavs()[Number(el.dataset.i)];
+        if (!f) return;
+        toggleMapPanel(true);
+        const idx = state.points.findIndex((p) => favKey(p) === favKey(f));
+        if (idx >= 0) focusPoint(idx);
+        else {
+          appendMessage('assistant',
+            `❤️ ${f.name}：收藏于之前的对话。地址：${f.address || '未知'}`
+            + (f.rating ? ` · ★ ${f.rating}` : '')
+            + `\n\n重新查询这个地点就能在地图上看到它啦～`);
+        }
+      });
+    });
+    favList.querySelectorAll('.fav-del').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const list = loadFavs();
+        list.splice(Number(el.dataset.i), 1);
+        saveFavs(list);
+        // 同步刷新卡片按钮状态
+        mapList.querySelectorAll('.fav-btn').forEach((btn) => {
+          const p = state.points[Number(btn.dataset.i)];
+          if (p) btn.textContent = isFav(p) ? '❤️' : '🤍';
+        });
+      });
+    });
+  }
+
   /* ── 地图面板 ─────────────────────────── */
   const CAT_COLOR = { shopping: '#FF6B6B', hotel: '#4D96FF', sightseeing: '#2BB673' };
   const CAT_LABEL = { shopping: '商场', hotel: '酒店', sightseeing: '景点' };
@@ -194,7 +273,12 @@
           <a href="${markerUrl}" target="_blank" rel="noopener">📍 高德查看</a>
           <a href="${navUrl}" target="_blank" rel="noopener">🧭 导航</a>
         </div>
-      </div>`;
+      </div>
+      <button class="fav-btn" data-i="${index}" title="${isFav(p) ? '取消收藏' : '收藏'}">${isFav(p) ? '❤️' : '🤍'}</button>`;
+    card.querySelector('.fav-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFav(p, e.currentTarget);
+    });
     card.addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
       focusPoint(index);
@@ -630,6 +714,7 @@
   });
 
   renderHistory();
+  renderFavs();
   bindWelcome();
   inputEl.focus();
 })();
