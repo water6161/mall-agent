@@ -316,8 +316,22 @@ def run(env: dict, message: str, history: list | None = None,
         try:
             spot = recognize_spot(env, image)
         except Exception as e:
-            return {"reply": f"😵‍💫 图片识别失败了：{str(e)[:160]}\n\n换张清晰点的照片再试试～",
-                    "points": []}
+            err = str(e)
+            # 402 / 额度不足：模型网关没余额了，不是照片问题
+            if "402" in err or "quota" in err.lower() or "insufficient" in err.lower():
+                reply = (
+                    "😵‍💫 图片识别失败了：视觉模型额度不足（402）。\n\n"
+                    "这不是照片的问题，是你的大模型网关（百炼/Makers）账户余额不够了，"
+                    "去充值或确认 VISION_MODEL 对应的模型有可用额度后再试～"
+                )
+            elif "401" in err or "403" in err:
+                reply = (
+                    "😵‍💫 图片识别失败了：视觉模型鉴权失败（401/403）。\n\n"
+                    "请检查 API Key 是否正确、VISION_MODEL 这个模型你是否有权限调用。"
+                )
+            else:
+                reply = f"😵‍💫 图片识别失败了：{err[:160]}\n\n换张清晰点的照片再试试～"
+            return {"reply": reply, "points": []}
 
         if not spot["found"]:
             return {"reply": "🔍 这张图里没认出明显的景点或地标。\n"
