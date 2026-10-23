@@ -1,6 +1,6 @@
 """小水 Agent 核心逻辑（与运行时解耦，方便本地直接测试）。
 
-只依赖 httpx：
+只依赖 Python 标准库（urllib），无需在构建阶段安装第三方包：
 - LLM 走 OpenAI 兼容协议（DashScope / Makers 内置模型网关均可）
 - 地点数据走高德 Web 服务 API
 - 景点识别走视觉模型（qwen3-vl 等）
@@ -10,14 +10,36 @@
 
 import json
 import re
-
-import httpx
+import urllib.error
+import urllib.parse
+import urllib.request
 
 DEFAULT_BASE_URL = "https://ai-gateway.edgeone.link/v1"
 DEFAULT_MODEL = "@makers/deepseek-v4-flash"
 DEFAULT_VISION_MODEL = "qwen3-vl-plus"
 
 TIMEOUT = 45
+
+
+# ─── HTTP（标准库） ─────────────────────────────────────────
+
+def _send(req, timeout: int):
+    """发请求，返回 (status, text)。HTTP 错误码也当正常返回处理。"""
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "ignore")
+
+
+def _post_json(url: str, payload: dict, headers: dict, timeout: int):
+    data = json.dumps(payload).encode("utf-8")
+    return _send(urllib.request.Request(url, data=data, headers=headers, method="POST"), timeout)
+
+
+def _get_json(url: str, params: dict, timeout: int):
+    full = url + "?" + urllib.parse.urlencode(params)
+    return _send(urllib.request.Request(full, method="GET"), timeout)
 
 CATEGORY_LABEL = {"shopping": "商场", "hotel": "酒店", "sightseeing": "景点"}
 
@@ -104,19 +126,19 @@ def _chat(env: dict, messages: list, model: str | None = None,
         "temperature": temperature,
         "messages": messages,
     }
-    r = httpx.post(
+    status, text = _post_json(
         env["base_url"] + "/chat/completions",
-        headers={
+        body,
+        {
             "Authorization": f"Bearer {env['api_key']}",
             "Content-Type": "application/json",
         },
-        json=body,
-        timeout=TIMEOUT,
+        TIMEOUT,
     )
-    if r.status_code != 200:
-        raise RuntimeError(f"模型返回 {r.status_code}：{r.text[:160]}")
+    if status != 200:
+        raise RuntimeError(f"模型返回 {status}：{text[:160]}")
 
-    choices = r.json().get("choices") or []
+    choices = json.loads(text).get("choices") or []
     content = choices[0].get("message", {}).get("content", "") if choices else ""
     if isinstance(content, list):
         content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
@@ -148,16 +170,18 @@ def _amap_search(env: dict, city: str, keyword: str, limit: int = 8) -> list:
     if not key or not city:
         return []
     try:
-        r = httpx.get(
+        status, text = _get_json(
             "https://restapi.amap.com/v3/place/text",
-            params={
+            {
                 "key": key, "keywords": keyword, "city": city,
                 "citylimit": "true", "output": "json", "offset": limit,
             },
-            timeout=20,
+            20,
         )
-        data = r.json()
-    except (httpx.HTTPError, ValueError):
+        if status != 200:
+            return []
+        data = json.loads(text)
+    except (urllib.error.URLError, ValueError):
         return []
 
     if data.get("status") != "1":
@@ -232,18 +256,18 @@ def recognize_spot(env: dict, image_data_uri: str) -> dict:
             ],
         }],
     }
-    r = httpx.post(
+    status, text = _post_json(
         env["base_url"] + "/chat/completions",
-        headers={
+        body,
+        {
             "Authorization": f"Bearer {env['api_key']}",
             "Content-Type": "application/json",
         },
-        json=body,
-        timeout=90,
+        90,
     )
-    if r.status_code != 200:
-        raise RuntimeError(f"视觉模型返回 {r.status_code}：{r.text[:160]}")
-    choices = r.json().get("choices") or []
+    if status != 200:
+        raise RuntimeError(f"视觉模型返回 {status}：{text[:160]}")
+    choices = json.loads(text).get("choices") or []
     content = choices[0].get("message", {}).get("content", "") if choices else ""
     if isinstance(content, list):
         content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))

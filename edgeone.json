@@ -4,6 +4,5 @@
     "dir": "agents",
     "timeout": 300
   },
-  "installCommand": "pip install --no-cache-dir -r agents/mall-agent/requirements.txt",
   "outputDirectory": "./public"
 }
