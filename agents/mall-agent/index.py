@@ -36,6 +36,7 @@ def _context_env(context) -> dict:
 
     names = (
         "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "VISION_MODEL",
+        "VISION_BASE_URL", "VISION_API_KEY",
         "AMAP_KEY", "AI_GATEWAY_API_KEY", "AI_GATEWAY_BASE_URL", "AI_GATEWAY_MODEL",
     )
     return {n: getattr(env, n) for n in names if getattr(env, n, None)}

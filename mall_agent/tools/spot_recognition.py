@@ -79,11 +79,12 @@ def _parse_json(raw: str) -> dict:
 
 def recognize_spot(image_path: str) -> dict:
     """返回 {found, name, city, landmark_type, description}。"""
-    key = os.getenv("OPENAI_API_KEY", "")
+    key = os.getenv("VISION_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     if not key:
         raise SpotRecognitionError("OPENAI_API_KEY 未配置")
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    base_url = (os.getenv("VISION_BASE_URL", "") or os.getenv("OPENAI_BASE_URL", "")
+                or "https://api.openai.com/v1").rstrip("/")
     model = os.getenv("VISION_MODEL") or DEFAULT_VISION_MODEL
 
     body = {

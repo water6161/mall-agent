@@ -16,6 +16,9 @@ AMAP_KEY=你的高德Web服务Key
 # AMAP_SECURITY_CODE=高德安全密钥
 # 可选：图片识别
 # VISION_MODEL=qwen3-vl-plus
+# 可选：视觉模型独立网关（EdgeOne 部署时必配，让识图直连百炼）
+# VISION_BASE_URL=https://llm-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+# VISION_API_KEY=你的百炼APIKey
 ```
 
 ---

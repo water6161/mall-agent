@@ -101,15 +101,18 @@ def resolve_env(env: dict | None = None) -> dict:
     api_key = get("OPENAI_API_KEY") or get("AI_GATEWAY_API_KEY") or get("MAKERS_MODELS_KEY")
     base_url = get("OPENAI_BASE_URL") or get("AI_GATEWAY_BASE_URL") or DEFAULT_BASE_URL
     model = get("OPENAI_MODEL") or get("AI_GATEWAY_MODEL") or DEFAULT_MODEL
-    vision = get("VISION_MODEL") or (
-        model if base_url.rstrip("/") == DEFAULT_BASE_URL else DEFAULT_VISION_MODEL
-    )
+    vision = get("VISION_MODEL") or DEFAULT_VISION_MODEL
+    # 视觉模型支持独立网关：未配置 VISION_BASE_URL 时沿用主 base_url
+    vision_base_url = get("VISION_BASE_URL") or base_url
+    vision_api_key = get("VISION_API_KEY") or api_key
 
     return {
         "api_key": api_key,
         "base_url": base_url.rstrip("/"),
         "model": model,
         "vision_model": vision,
+        "vision_base_url": vision_base_url.rstrip("/"),
+        "vision_api_key": vision_api_key,
         "amap_key": get("AMAP_KEY"),
     }
 
@@ -257,10 +260,10 @@ def recognize_spot(env: dict, image_data_uri: str) -> dict:
         }],
     }
     status, text = _post_json(
-        env["base_url"] + "/chat/completions",
+        env["vision_base_url"] + "/chat/completions",
         body,
         {
-            "Authorization": f"Bearer {env['api_key']}",
+            "Authorization": f"Bearer {env['vision_api_key']}",
             "Content-Type": "application/json",
         },
         90,
