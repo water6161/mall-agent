@@ -58,11 +58,11 @@ TYPE_KEYWORDS = {
 
 INTENT_PROMPT = """你是"小水"，一个出行决策助手。判断用户这句话的意图，严格输出 JSON，不要输出任何其他文字：
 {
-  "intent": "shopping|hotel|sightseeing|route|spot|chat|discover",
+  "intent": "shopping|hotel|sightseeing|plan|spot|chat|discover",
   "city": "城市名，没有则为 null；只说了城市名（如"深圳"）时 intent 填 discover",
   "preference": "偏好关键词，如 高端/亲子/性价比，没有则为 null"
 }
-规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，问路线=route，上传图片=spot，打招呼闲聊=chat，只给城市名=discover。"""
+规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover。"""
 
 REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工具查到的真实地点数据，用口语化中文回答用户，像朋友推荐一样。
 
@@ -73,6 +73,20 @@ REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工
 - 控制在 260 字以内，可以用少量条目列表
 - 如果数据明显不匹配用户需求，就直说没找到合适的，并建议换个关键词
 - 不要用机械的开场白"""
+
+PLAN_PROMPT = """你是"小水"，一个贴心的出行规划师。用户想要一份行程安排，只能使用下面给出的真实地点数据来规划，绝不编造数据之外的地点。
+
+可用的地点数据（名称 | 类型 | 地址 | 评分）：
+{poi}
+
+要求：
+- 按时间轴输出：上午 → 中午 → 下午 → 傍晚/晚上，每段安排 1-2 个地点
+- 安排顺序要考虑地点类型（白天逛景点，中午在商场/商圈附近吃饭，晚上可安排地标夜景）
+- 每个地点后面用括号标注评分（数据里有才写）
+- 结尾补一句实用提醒（穿舒适的鞋、提前查开放时间等，不要编造具体门票价格和时间）
+- 全文控制在 300 字以内，用列表输出"""
+
+SPOT_FOLLOWUP = "\n\n---\n要我接着帮你查这附近的美食、酒店，或者把这个景点安排进行程吗？说一声就行～"
 
 SPOT_PROMPT = """识别这张照片里的景点或地标。严格输出 JSON，不要输出其他文字：
 {
@@ -233,6 +247,51 @@ def _need_more_city_reply(city_keyword: str) -> str:
     return f"你想在哪个城市找{city_keyword}呀？告诉我城市名，我马上帮你查～"
 
 
+# ─── 行程规划 ───────────────────────────────────────────────
+
+def _run_plan(env: dict, message: str, city: str, preference: str = "") -> dict:
+    if not city:
+        return {"reply": "想安排哪座城市的行程呀？告诉我城市名（比如「北京一日游」），"
+                         "我马上帮你排一份时间轴路线～", "points": []}
+    if not env.get("amap_key"):
+        return {
+            "reply": "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你规划行程。",
+            "points": [],
+        }
+
+    # 景点为主，捎带商圈（吃饭/购物），组成行程素材
+    points = []
+    for kw, cat in [(_keyword(preference, "sightseeing"), "sightseeing"),
+                    (CATEGORY_BASE["shopping"], "shopping")]:
+        raw = _amap_search(env, city, kw, limit=8)
+        pois = _filter_pois(raw, cat)
+        if not pois and raw:
+            pois = raw
+        for poi in pois[:6]:
+            points.append(dict(poi, category=cat))
+
+    if not points:
+        return {"reply": f"在「{city}」暂时没查到能安排进行程的地点，"
+                         f"换个城市或关键词试试～", "points": []}
+
+    digest = _poi_digest(points)
+    prompt = f"用户的话：{message}\n城市：{city}\n\n" + PLAN_PROMPT.replace("{poi}", digest)
+    try:
+        reply = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
+                            {"role": "user", "content": prompt}], temperature=0.4)
+    except Exception as e:
+        names = "、".join(p["name"] for p in points[:6])
+        reply = f"给你找到 {city} 这些地方：{names}\n（详细行程没生成成功：{str(e)[:80]}）"
+
+    return {
+        "reply": reply,
+        "points": points[:12],
+        "map_image": "",
+        "plan": True,
+        "city": city,
+    }
+
+
 def _poi_digest(points: list) -> str:
     rows = []
     for p in points[:10]:
@@ -361,7 +420,7 @@ def run(env: dict, message: str, history: list | None = None,
                     f"（后续推荐没生成成功：{str(e)[:80]}）"
 
         return {
-            "reply": reply,
+            "reply": reply + SPOT_FOLLOWUP,
             "points": [p for p in points if p.get("lng")],
             "map_image": "",
             "spot": spot,
@@ -391,9 +450,8 @@ def run(env: dict, message: str, history: list | None = None,
             reply = f"😵‍💫 模型调用失败：{str(e)[:160]}"
         return {"reply": reply, "points": []}
 
-    if intent == "route":
-        reply = "路线规划这块我先简化掉了～你可以告诉我起点和终点，我帮你查两地周边值得逛的地方。"
-        return {"reply": reply, "points": []}
+    if intent in ("plan", "route"):
+        return _run_plan(env, message, city, preference)
 
     # 3) 按意图查高德
     if intent == "discover":

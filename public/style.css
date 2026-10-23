@@ -353,3 +353,13 @@ html, body {
   .welcome-examples { grid-template-columns: 1fr; }
   .welcome { margin-top: 4vh; }
 }
+
+/* 语音输入录音中 */
+.tool-btn.recording {
+  background: #ff5a5a;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}

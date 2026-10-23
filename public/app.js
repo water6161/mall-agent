@@ -27,6 +27,7 @@
     points: [],
     pendingImage: '',
     busy: false,
+    isPlan: false,
   };
   localStorage.setItem(LS_CID, state.cid);
 
@@ -214,9 +215,10 @@
     mapEmpty.textContent = text;
   }
 
-  function renderMap(points) {
+  function renderMap(points, isPlan) {
     const valid = (points || []).filter((p) =>
       Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
+    state.isPlan = !!isPlan && valid.length > 1;
     state.points = valid;
     markerByIndex.clear();
     activeIndex = -1;
@@ -272,6 +274,14 @@
       markerByIndex.set(i, marker);
     });
 
+    // 行程模式：按顺序把地点连成虚线路线
+    if (state.isPlan && pts.length > 1) {
+      L.polyline(pts, {
+        color: '#2BB673', weight: 3, dashArray: '7 9',
+        opacity: 0.75, lineJoin: 'round',
+      }).addTo(instance);
+    }
+
     requestAnimationFrame(invalidate);
   }
 
@@ -319,7 +329,7 @@
       appendMessage('assistant', reply);
       state.messages.push({ role: 'assistant', content: reply });
 
-      if (data.points && data.points.length) renderMap(data.points);
+      if (data.points && data.points.length) renderMap(data.points, !!data.plan);
       saveSession();
     } catch (err) {
       removeTyping();
@@ -347,6 +357,7 @@
       title: (firstUser ? firstUser.content : '新对话').slice(0, 24),
       messages: state.messages.slice(-30),
       points: state.points.slice(0, 12),
+      isPlan: !!state.isPlan,
       time: Date.now(),
     });
     localStorage.setItem(LS_SESSIONS, JSON.stringify(list.slice(0, MAX_SESSIONS)));
@@ -375,7 +386,7 @@
     state.messages = s.messages || [];
     chatEl.innerHTML = '';
     state.messages.forEach((m) => appendMessage(m.role, m.content));
-    if (s.points && s.points.length) renderMap(s.points);
+    if (s.points && s.points.length) renderMap(s.points, !!s.isPlan);
     else resetMapPanel('这次对话没有位置数据');
     renderHistory();
   }
@@ -402,6 +413,7 @@
         <button class="example" data-text="北京有什么好逛的商场？我喜欢高端品牌">💎 北京有什么好逛的商场？</button>
         <button class="example" data-text="上海外滩附近性价比高的酒店推荐">🏨 上海外滩附近性价比酒店</button>
         <button class="example" data-text="成都两天怎么玩？帮我推荐景点">✈️ 成都两天怎么玩？</button>
+        <button class="example" data-text="帮我安排北京一日游行程">🗓️ 帮我安排北京一日游</button>
         <button class="example" data-photo="1">📷 上传照片，帮我认认这是哪儿</button>
       </div>`;
     return div;
@@ -473,6 +485,118 @@
   }
 
   $('attachRemove').addEventListener('click', clearImage);
+
+  /* ── 语音输入（Web Speech API） ────────── */
+  const micBtn = $('micBtn');
+  let recog = null, recogOn = false;
+
+  function setupSpeech() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const r = new SR();
+    r.lang = 'zh-CN';
+    r.interimResults = true;
+    r.continuous = false;
+    let base = '';
+    r.onstart = () => { base = inputEl.value; };
+    r.onresult = (e) => {
+      let txt = '';
+      for (const res of e.results) txt += res[0].transcript;
+      inputEl.value = (base ? base + ' ' : '') + txt;
+      autoGrow();
+    };
+    r.onend = () => { recogOn = false; micBtn.classList.remove('recording'); };
+    r.onerror = () => { recogOn = false; micBtn.classList.remove('recording'); };
+    return r;
+  }
+
+  micBtn.addEventListener('click', () => {
+    if (recogOn) { recog && recog.stop(); return; }
+    if (!recog) recog = setupSpeech();
+    if (!recog) {
+      appendMessage('assistant', '🎤 这个浏览器不支持语音输入，建议用 Chrome 或 Edge 试试～');
+      return;
+    }
+    try {
+      recog.start();
+      recogOn = true;
+      micBtn.classList.add('recording');
+    } catch { /* 重复启动忽略 */ }
+  });
+
+  /* ── 分享卡片（Canvas 生成 PNG） ──────── */
+  function wrapText(ctx, text, maxWidth) {
+    const lines = [];
+    for (const raw of (text || '').split(/\r?\n/)) {
+      let line = '';
+      for (const ch of raw) {
+        if (ctx.measureText(line + ch).width > maxWidth && line) {
+          lines.push(line); line = ch;
+        } else line += ch;
+      }
+      lines.push(line);
+    }
+    return lines;
+  }
+
+  function shareCard() {
+    const lastBot = [...state.messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastBot && !state.points.length) {
+      alert('还没有可分享的内容，先聊点什么吧～');
+      return;
+    }
+    const W = 750, PAD = 56;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // 先量高度
+    const bodyText = (lastBot ? lastBot.content : '').slice(0, 600);
+    ctx.font = '26px sans-serif';
+    const bodyLines = wrapText(ctx, bodyText, W - PAD * 2);
+    const poiLines = state.points.slice(0, 6)
+      .map((p) => `${p.name}${p.rating ? ' ★' + p.rating : ''}`);
+    const H = 200 + bodyLines.length * 40 + (poiLines.length ? poiLines.length * 40 + 90 : 0) + 90;
+    canvas.width = W; canvas.height = H;
+
+    // 背景 + 头部
+    const grad = ctx.createLinearGradient(0, 0, W, 220);
+    grad.addColorStop(0, '#2BB673'); grad.addColorStop(1, '#1E8FA8');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, 200);
+    ctx.fillStyle = '#f6f8fb'; ctx.fillRect(0, 200, W, H - 200);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 44px sans-serif';
+    ctx.fillText('🧳 小水 · 出行决策助手', PAD, 92);
+    ctx.font = '24px sans-serif';
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(state.isPlan ? '我的行程安排' : '我的出行发现', PAD, 140);
+    ctx.globalAlpha = 1;
+
+    // 正文
+    ctx.fillStyle = '#2a3342'; ctx.font = '26px sans-serif';
+    bodyLines.forEach((line, i) => ctx.fillText(line, PAD, 250 + i * 40));
+
+    // 地点清单
+    let y = 250 + bodyLines.length * 40;
+    if (poiLines.length) {
+      y += 30;
+      ctx.fillStyle = '#8a94a6'; ctx.font = '22px sans-serif';
+      ctx.fillText('📍 相关地点', PAD, y); y += 44;
+      ctx.fillStyle = '#2a3342'; ctx.font = '24px sans-serif';
+      poiLines.forEach((line) => { ctx.fillText('· ' + line, PAD, y); y += 40; });
+    }
+
+    // 页脚
+    ctx.fillStyle = '#b0b8c4'; ctx.font = '22px sans-serif';
+    ctx.fillText('由「小水」生成 · 识景点 / 找商场 / 排行程', PAD, H - 40);
+
+    const a = document.createElement('a');
+    a.download = 'xiaoshui-share.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  }
+
+  $('shareBtn').addEventListener('click', shareCard);
 
   /* ── 交互绑定 ─────────────────────────── */
   sendBtn.addEventListener('click', send);
