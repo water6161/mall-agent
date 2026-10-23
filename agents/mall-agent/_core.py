@@ -88,6 +88,78 @@ PLAN_PROMPT = """你是"小水"，一个贴心的出行规划师。用户想要�
 
 SPOT_FOLLOWUP = "\n\n---\n要我接着帮你查这附近的美食、酒店，或者把这个景点安排进行程吗？说一声就行～"
 
+
+# ─── 天气（高德优先，Open-Meteo 兜底，均免费） ──────────────
+
+_WMO = {
+    0: "晴", 1: "大致晴", 2: "多云", 3: "阴", 45: "有雾", 48: "雾凇",
+    51: "小毛雨", 53: "毛雨", 55: "大毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 80: "阵雨", 81: "中阵雨", 82: "强阵雨",
+    95: "雷阵雨", 96: "雷阵雨伴冰雹", 99: "雷阵雨伴大冰雹",
+}
+
+
+def _weather_amap(env: dict, city: str) -> str:
+    if not env.get("amap_key") or not city:
+        return ""
+    try:
+        status, text = _get_json("https://restapi.amap.com/v3/geocode/geo",
+                                 {"address": city, "key": env["amap_key"]}, 10)
+        if status != 200:
+            return ""
+        geos = json.loads(text).get("geocodes") or []
+        if not geos or not geos[0].get("adcode"):
+            return ""
+        status, text = _get_json("https://restapi.amap.com/v3/weather/weatherInfo",
+                                 {"city": geos[0]["adcode"], "key": env["amap_key"],
+                                  "extensions": "all"}, 10)
+        if status != 200:
+            return ""
+        forecasts = json.loads(text).get("forecasts")
+        casts = (forecasts or [{}])[0].get("casts") or []
+        if not casts:
+            return ""
+        parts = []
+        for c in casts[:2]:
+            day = "今天" if c.get("date") == casts[0].get("date") else (
+                "明天" if len(parts) == 1 else "后天")
+            parts.append(f"{day}{c.get('dayweather') or ''} "
+                         f"{c.get('nighttemp') or '?'}~{c.get('daytemp') or '?'}°C")
+        return "、".join(parts)
+    except Exception:
+        return ""
+
+
+def _weather_meteo(lat, lng) -> str:
+    try:
+        status, text = _get_json(
+            "https://api.open-meteo.com/v1/forecast",
+            {"latitude": lat, "longitude": lng, "timezone": "auto",
+             "daily": "temperature_2m_max,temperature_2m_min,weather_code",
+             "forecast_days": "2"}, 10)
+        if status != 200:
+            return ""
+        daily = json.loads(text).get("daily") or {}
+        codes = daily.get("weather_code") or []
+        tmax = daily.get("temperature_2m_max") or []
+        tmin = daily.get("temperature_2m_min") or []
+        if not codes:
+            return ""
+        day = _WMO.get(codes[0], "天气未知")
+        out = f"今天{day} {tmin[0]}~{tmax[0]}°C" if tmax and tmin else "天气未知"
+        if len(codes) > 1:
+            out += f"，明天{_WMO.get(codes[1], '')} {tmin[1]}~{tmax[1]}°C"
+        return out
+    except Exception:
+        return ""
+
+
+def _weather_line(env: dict, city: str = "", lat=None, lng=None) -> str:
+    text = _weather_amap(env, city)
+    if not text and lat is not None and lng is not None:
+        text = _weather_meteo(lat, lng)
+    return text
+
 SPOT_PROMPT = """识别这张照片里的景点或地标。严格输出 JSON，不要输出其他文字：
 {
   "found": true/false,
@@ -418,6 +490,12 @@ def run(env: dict, message: str, history: list | None = None,
             reply = f"认出来了：{spot['name']}（{city or '城市未知'}）" \
                     f"｜{spot.get('landmark_type') or ''}｜{spot.get('description') or ''}\n" \
                     f"（后续推荐没生成成功：{str(e)[:80]}）"
+
+        weather = _weather_line(env, city,
+                                points[0].get("lat") if points else None,
+                                points[0].get("lng") if points else None)
+        if weather:
+            reply += f"\n\n🌤️ 顺带提醒：{city} {weather}，出行注意天气～"
 
         return {
             "reply": reply + SPOT_FOLLOWUP,

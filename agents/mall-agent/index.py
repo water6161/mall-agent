@@ -10,6 +10,7 @@ POST /mall-agent
 import os
 import sys
 import json
+import time
 import inspect
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -86,8 +87,46 @@ async def _read_body(request) -> dict:
     return _parse_payload(request)
 
 
+# ─── IP 限流（内存版，尽力而为） ───────────────────────────
+_RATE: dict = {}
+RATE_LIMIT = 20      # 每个 IP 窗口内最大请求数
+RATE_WINDOW = 600    # 窗口 10 分钟
+
+
+def _client_ip(request) -> str:
+    try:
+        headers = getattr(request, "headers", None)
+        if headers is not None:
+            get = getattr(headers, "get", None)
+            if callable(get):
+                return (get("x-forwarded-for") or get("x-real-ip")
+                        or getattr(request, "client_ip", None) or "unknown")
+    except Exception:
+        pass
+    return getattr(request, "client_ip", None) or getattr(request, "ip", None) or "unknown"
+
+
+def _rate_ok(ip: str) -> bool:
+    now = time.time()
+    arr = [t for t in _RATE.get(ip, []) if now - t < RATE_WINDOW]
+    ok = len(arr) < RATE_LIMIT
+    if ok:
+        arr.append(now)
+    _RATE[ip] = arr
+    if len(_RATE) > 5000:  # 防内存膨胀，清理过期项
+        for k in list(_RATE):
+            _RATE[k] = [t for t in _RATE[k] if now - t < RATE_WINDOW]
+            if not _RATE[k]:
+                _RATE.pop(k, None)
+    return ok
+
+
 async def handler(context):
     body = await _read_body(getattr(context, "request", None))
+
+    ip = _client_ip(getattr(context, "request", None))
+    if not _rate_ok(ip):
+        return {"reply": "😅 你请求得有点太频繁啦，休息几分钟再来吧～", "points": []}
 
     message = body.get("message") or body.get("user_input") or ""
     history = body.get("history") or body.get("messages") or []
