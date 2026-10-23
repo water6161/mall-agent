@@ -392,15 +392,45 @@ def run(env: dict, message: str, history: list | None = None,
         label = CATEGORY_LABEL.get(plan[0][1], "地点")
         return {"reply": _need_more_city_reply(label), "points": []}
 
+    # 没配置高德 Key 时直接说明，不要误导用户说"关键词太窄"
+    if not env.get("amap_key"):
+        return {
+            "reply": "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你查地点。\n"
+                     "请在环境变量里填上 AMAP_KEY（注意类型要选「Web服务」，不要选「Web端(JS API)」）后再试～",
+            "points": [],
+        }
+
     points = []
     for kw, cat in plan:
-        pois = _filter_pois(_amap_search(env, city, kw, limit=8), cat)
+        raw = _amap_search(env, city, kw, limit=8)
+        pois = _filter_pois(raw, cat)
+        # 类型过滤太严把结果全滤掉时，回退到原始结果，避免有数据却显示"查不到"
+        if not pois and raw:
+            pois = raw
         for poi in pois[:6]:
             points.append(dict(poi, category=cat))
 
+    # 第一轮没查到时，用更宽泛的基础词再兜底搜一遍
+    if not points:
+        fallback_plan = [
+            (CATEGORY_BASE["shopping"], "shopping"),
+            (CATEGORY_BASE["sightseeing"], "sightseeing"),
+            (CATEGORY_BASE["hotel"], "hotel"),
+        ] if intent == "discover" else [(CATEGORY_BASE.get(plan[0][1], "景点"), plan[0][1])]
+        for kw, cat in fallback_plan:
+            raw = _amap_search(env, city, kw, limit=8)
+            pois = _filter_pois(raw, cat)
+            if not pois and raw:
+                pois = raw
+            for poi in pois[:6]:
+                points.append(dict(poi, category=cat))
+            if points:
+                break
+
     if not points:
         return {
-            "reply": f"没在「{city}」查到相关地点，可能关键词太窄，换个说法（比如\"购物中心\"、\"博物馆\"）再试试～",
+            "reply": f"在「{city}」暂时没查到相关地点。可能是地图服务暂时不可用，"
+                     f"你可以换个更具体的关键词（比如「万象城」「故宫」「如家酒店」）再试试～",
             "points": [],
         }
 

@@ -342,6 +342,14 @@ def generate_recommend(state: AgentState) -> AgentState:
                 if r:
                     data_parts.append(f"【{label}数据】\n{r}")
 
+            # 高德 Key 未配置时，工具会返回 {"error": "AMAP_KEY 未配置"}，直接提示用户，不要喂给 LLM
+            if any("AMAP_KEY 未配置" in r for r in data_parts):
+                reply = (
+                    "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你查地点。\n"
+                    "请在 .env 文件里填上 AMAP_KEY（注意类型要选「Web服务」，不要选「Web端(JS API)」）后重启服务～"
+                )
+                return {"messages": [AIMessage(content=reply)], "final_response": reply}
+
             extra_parts = []
             docs_text = state.get("user_docs")
             if docs_text:
