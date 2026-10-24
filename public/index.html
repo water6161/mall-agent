@@ -2161,9 +2161,18 @@ html, body {
   }
   async function start() {
     if (!window.PIXI) await loadScript('https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js');
-    if (!window.PIXI.live2d) {
-      await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
-      await loadScript('https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/index.min.js');
+    if (!window.PIXI.live2d || !window.PIXI.live2d.Live2DModel) {
+      if (!window.Live2DCubismCore) {
+        await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
+        if (!window.Live2DCubismCore) throw new Error('Cubism 内核加载失败（cubism.live2d.com 可能被网络拦截），请检查网络/广告拦截插件');
+      }
+      await loadScript('https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js');
+      for (let i = 0; i < 20 && !(window.PIXI && window.PIXI.live2d && window.PIXI.live2d.Live2DModel); i++) {
+        await new Promise(r => setTimeout(r, 150));
+      }
+      if (!(window.PIXI && window.PIXI.live2d && window.PIXI.live2d.Live2DModel)) {
+        throw new Error('Live2D 插件初始化失败：PIXI=' + (!!window.PIXI) + '，CubismCore=' + (!!window.Live2DCubismCore));
+      }
     }
     const stage = document.createElement('div');
     stage.id = 'l2dStage';
