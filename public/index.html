@@ -1182,7 +1182,20 @@ html, body {
       </div>
     </section>
 
-    <div class="composer">
+    <style id="extraCss">
+.quickbar{display:flex;gap:8px;flex-wrap:wrap;padding:0 16px 6px;max-width:860px;margin:0 auto}
+.quickbar button{border:1px solid #dbe4ef;background:#fff;border-radius:999px;padding:5px 12px;font-size:13px;color:#3a4a5e;cursor:pointer;transition:all .15s}
+.quickbar button:hover{background:#eaf3ff;border-color:#9cc4f5;transform:translateY(-1px)}
+body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6}
+</style>
+<div class="composer">
+      <div class="quickbar" id="quickbar">
+        <button data-q="我附近有什么值得逛的景点？">📍 附近景点</button>
+        <button data-q="帮我找找附近好吃的餐厅">🍜 找吃的</button>
+        <button data-q="附近有什么性价比高的酒店？">🛏️ 找酒店</button>
+        <button data-q="附近有什么适合逛街购物的商场？">🛍️ 买东西</button>
+        <button id="fortuneBtn">🎋 今日运势</button>
+      </div>
       <div class="attach-preview" id="attachPreview" hidden>
         <img id="attachThumb" alt="待识别照片" />
         <button id="attachRemove" title="移除">✕</button>
@@ -1200,6 +1213,7 @@ html, body {
   <aside class="map-panel" id="mapPanel">
     <div class="map-head">
       <span>📍 位置地图</span>
+      <button class="icon-btn" id="icsBtn" title="导出到手机日历(.ics)" hidden>📅</button>
       <button class="icon-btn" id="mapClose" title="收起">✕</button>
     </div>
     <div class="map-body" id="mapBody">
@@ -1540,6 +1554,7 @@ html, body {
     const valid = (points || []).filter((p) =>
       Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
     state.isPlan = !!isPlan && valid.length > 1;
+    if (icsBtn) icsBtn.hidden = !state.isPlan;
     state.points = valid;
     markerByIndex.clear();
     activeIndex = -1;
@@ -1626,6 +1641,74 @@ html, body {
                    if (c !== undefined) wxApply(c); })
       .catch(() => {});
   }
+
+  /* ── 快捷指令条 ── */
+  document.querySelectorAll('#quickbar button').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (state.busy) return;
+      inputEl.value = b.dataset.q;
+      send();
+    });
+  });
+
+  /* ── 行程导出日历 .ics ── */
+  const icsBtn = document.getElementById('icsBtn');
+  icsBtn.addEventListener('click', function(){
+    if (!state.isPlan || !state.points.length) return;
+    function pad(n){ return (n < 10 ? '0' : '') + n; }
+    const d = new Date();
+    let day = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+    function stamp(h, m){ return day + 'T' + pad(h) + pad(m) + '00'; }
+    let h = 9, out = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//xiaoshui//plan//CN'];
+    state.points.forEach(function(p, i){
+      const dur = 90;
+      out.push('BEGIN:VEVENT',
+        'UID:xiaoshui-' + day + '-' + i + '@plan',
+        'DTSTART:' + stamp(h, 0),
+        'DTEND:' + stamp(h + Math.floor(dur / 60), dur % 60),
+        'SUMMARY:第' + (i + 1) + '站 · ' + (p.name || '景点'),
+        'DESCRIPTION:' + String(p.desc || '').replace(/\n/g, ' ').slice(0, 200),
+        'LOCATION:' + Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5),
+        'BEGIN:VALARM','TRIGGER:-PT30M','ACTION:DISPLAY',
+        'DESCRIPTION:马上出发去 ' + (p.name || '下一站') + ' 啦','END:VALARM',
+        'END:VEVENT');
+      h += 2; if (h > 18) h = 20;
+    });
+    out.push('END:VCALENDAR');
+    const blob = new Blob([out.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '行程安排.ics';
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+    appendMessage('assistant', '📅 日历文件已生成，手机上点开就能一键导入，每个景点前 30 分钟还会提醒你出发～');
+  });
+
+  /* ── 每日运势签（萧逸版） ── */
+  const FORTUNES = [
+    '今日宜探店，忌剁手。萧逸说：「别急，想买的我都记下了。」幸运方位：东南 · 幸运色：雾蓝',
+    '今日宜午後咖啡，忌加班。萧逸说：「陪我走一段，天大的事先放放。」幸运方位：正西 · 幸运数字：7',
+    '今日宜旧地重游，忌立 flag。萧逸说：「上次那家店，我还想再去一次。」幸运方位：正南 · 幸运色：暮色橙',
+    '今日宜大声笑，忌内耗。萧逸说：「你笑起来的时候，运气都会绕路来找你。」幸运方位：东北 · 幸运数字：3',
+    '今日宜计划出行，忌犹豫。萧逸说：「票我来订，你只需要出现在门口。」幸运方位：正东 · 幸运色：曜石黑',
+    '今日宜随手拍照，忌_comparison。萧逸说：「今天拍到的你，比风景好看。」幸运方位：西北 · 幸运数字：9',
+    '今日宜早睡，忌熬夜刷手机。萧逸说：「晚安，明天见，不许赖掉。」幸运方位：正北 · 幸运色：晨光金',
+  ];
+  function dailyFortune(){
+    const d = new Date();
+    const seed = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+    return FORTUNES[seed % FORTUNES.length].replace('_comparison', '比较');
+  }
+  const fortuneBtn = document.getElementById('fortuneBtn');
+  if (fortuneBtn) fortuneBtn.addEventListener('click', function(){
+    if (state.busy) return;
+    const d = new Date();
+    const line = '🎋 「小水签筒」' + (d.getMonth() + 1) + '月' + d.getDate() + '日运势\n\n' + dailyFortune();
+    appendMessage('assistant', line);
+    const pb = document.getElementById('petBubble');
+    if (pb) { pb.textContent = '今天的运势，我帮你抽好啦～'; pb.hidden = false;
+              setTimeout(function(){ pb.hidden = true; }, 3200); }
+  });
 
   /* ── 发送 ─────────────────────────────── */
   async function send() {
