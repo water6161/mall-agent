@@ -1646,7 +1646,10 @@ body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6
   document.querySelectorAll('#quickbar button').forEach(function(b){
     b.addEventListener('click', function(){
       if (state.busy) return;
-      inputEl.value = b.dataset.q;
+      if (b.id === 'fortuneBtn') return;  // 运势签有自己的处理
+      const q = b.getAttribute('data-q');
+      if (!q) return;                     // 没有 data-q 的按钮不发消息
+      inputEl.value = q;
       send();
     });
   });

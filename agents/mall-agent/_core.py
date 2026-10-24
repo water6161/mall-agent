@@ -41,10 +41,10 @@ def _get_json(url: str, params: dict, timeout: int):
     full = url + "?" + urllib.parse.urlencode(params)
     return _send(urllib.request.Request(full, method="GET"), timeout)
 
-CATEGORY_LABEL = {"shopping": "商场", "hotel": "酒店", "sightseeing": "景点"}
+CATEGORY_LABEL = {"shopping": "商场", "hotel": "酒店", "sightseeing": "景点", "food": "美食"}
 
 # 搜索基础词（用户偏好是"高端/性价比"这类形容词时不能直接拿去当地点关键词）
-CATEGORY_BASE = {"shopping": "购物中心", "hotel": "酒店", "sightseeing": "景点"}
+CATEGORY_BASE = {"shopping": "购物中心", "hotel": "酒店", "sightseeing": "景点", "food": "美食餐厅"}
 GENERIC_PREFS = {
     "高端", "性价比", "性价比高", "便宜", "实惠", "豪华", "奢华", "亲子", "网红",
     "小众", "安静", "舒适", "好玩", "热门", "特色", "高评分", "有特色",
@@ -54,16 +54,17 @@ TYPE_KEYWORDS = {
     "shopping": ("购物", "商场", "超市", "商业", "百货"),
     "hotel": ("住宿", "酒店", "宾馆", "旅馆", "民宿", "客栈"),
     "sightseeing": ("风景名胜", "公园", "博物馆", "景点", "纪念", "宗教", "游乐", "动物园", "植物园"),
+    "food": ("餐饮", "餐厅", "美食", "小吃", "火锅", "烧烤", "咖啡", "茶座", "面包", "菜"),
 }
 
 INTENT_PROMPT = """你是"小水"，一个出行决策助手。判断用户这句话的意图，严格输出 JSON，不要输出任何其他文字：
 {
-  "intent": "shopping|hotel|sightseeing|plan|spot|chat|discover|buy",
+  "intent": "shopping|hotel|sightseeing|food|plan|spot|chat|discover|buy",
   "city": "城市名，没有则为 null；只说了城市名（如"深圳"）时 intent 填 discover",
   "preference": "偏好关键词，如 高端/亲子/性价比，没有则为 null",
   "budget": "预算金额（数字，元），没提到则为 null"
 }
-规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover，想买某样东西/求选购建议（如"我想买个相机5000以内"）=buy。"""
+规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，找餐厅/美食/吃饭/找吃的=food，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover，想买某样东西/求选购建议（如"我想买个相机5000以内"）=buy。"""
 
 REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工具查到的真实地点数据，用口语化中文回答用户，像朋友推荐一样。
 
@@ -674,11 +675,12 @@ def run(env: dict, message: str, history: list | None = None,
     # 3) 按意图查高德
     if intent == "discover":
         plan = [(_keyword("", "shopping"), "shopping"),
+                (_keyword("", "food"), "food"),
                 (_keyword("", "sightseeing"), "sightseeing"),
                 (_keyword("", "hotel"), "hotel")]
     else:
-        category = {"shopping": "shopping", "hotel": "hotel", "sightseeing": "sightseeing"}.get(
-            intent, "sightseeing")
+        category = {"shopping": "shopping", "hotel": "hotel", "sightseeing": "sightseeing",
+                    "food": "food"}.get(intent, "sightseeing")
         plan = [(_keyword(preference, category), category)]
 
     if not city:
@@ -707,6 +709,7 @@ def run(env: dict, message: str, history: list | None = None,
     if not points:
         fallback_plan = [
             (CATEGORY_BASE["shopping"], "shopping"),
+            (CATEGORY_BASE["food"], "food"),
             (CATEGORY_BASE["sightseeing"], "sightseeing"),
             (CATEGORY_BASE["hotel"], "hotel"),
         ] if intent == "discover" else [(CATEGORY_BASE.get(plan[0][1], "景点"), plan[0][1])]
