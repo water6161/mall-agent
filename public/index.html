@@ -1187,6 +1187,29 @@ html, body {
 .quickbar button{border:1px solid #dbe4ef;background:#fff;border-radius:999px;padding:5px 12px;font-size:13px;color:#3a4a5e;cursor:pointer;transition:all .15s}
 .quickbar button:hover{background:#eaf3ff;border-color:#9cc4f5;transform:translateY(-1px)}
 body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6}
+.cmp-table{width:100%;border-collapse:collapse;margin:6px 0;font-size:13px}
+.cmp-table th,.cmp-table td{border:1px solid #dbe4ef;padding:5px 8px;text-align:left}
+.cmp-table th{background:#eaf3ff;color:#2a5da8}
+body.dark .cmp-table th,body.dark .cmp-table td{border-color:#3a4a5e}
+body.dark .cmp-table th{background:#253241;color:#9cc4f5}
+.share-btn{display:inline-flex;align-items:center;gap:4px;margin-top:8px;border:1px solid #9cc4f5;background:#eaf3ff;color:#2a5da8;border-radius:999px;padding:4px 12px;font-size:13px;cursor:pointer}
+.share-btn:hover{background:#d8eaff}
+body.dark .share-btn{background:#253241;color:#9cc4f5}
+.tour-mask{position:fixed;inset:0;background:rgba(15,25,40,.55);z-index:9998;display:flex;align-items:center;justify-content:center}
+.tour-card{background:#fff;border-radius:18px;max-width:340px;width:86%;padding:26px 24px;box-shadow:0 18px 60px rgba(0,0,0,.25);text-align:center;animation:tourPop .3s ease}
+.tour-card .tour-ico{font-size:44px}
+.tour-card h3{margin:10px 0 6px;font-size:18px;color:#223a55}
+.tour-card p{margin:0 0 16px;font-size:14px;color:#5a6b7e;line-height:1.6}
+.tour-dots{margin-bottom:14px}
+.tour-dots i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#c9d6e5;margin:0 3px}
+.tour-dots i.on{background:#2a5da8;width:18px;border-radius:4px}
+.tour-btns{display:flex;gap:10px;justify-content:center}
+.tour-btns button{border-radius:999px;padding:7px 20px;font-size:14px;cursor:pointer;border:1px solid #c9d6e5;background:#fff;color:#5a6b7e}
+.tour-btns .primary{background:linear-gradient(135deg,#4a90e2,#2a5da8);border:none;color:#fff}
+@keyframes tourPop{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+body.dark .tour-card{background:#253241}
+body.dark .tour-card h3{color:#cdd8e6}
+body.dark .tour-card p{color:#8fa2b8}
 </style>
 <div class="composer">
       <div class="quickbar" id="quickbar">
@@ -1283,8 +1306,26 @@ body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6
     const lines = escapeHtml(text || '').split(/\r?\n/);
     let html = '';
     let inList = false;
+    let tRows = [];
+    const flushTable = () => {
+      if (!tRows.length) return;
+      html += '<table class="cmp-table">';
+      tRows.forEach((cells, ri) => {
+        const tag = ri === 0 ? 'th' : 'td';
+        html += '<tr>' + cells.map(c => '<' + tag + '>' + inline(c) + '</' + tag + '>').join('') + '</tr>';
+      });
+      html += '</table>';
+      tRows = [];
+    };
     for (const raw of lines) {
       const line = raw.trim();
+      if (/^\|.*\|$/.test(line)) {
+        const cells = line.slice(1, -1).split('|').map(c => c.trim());
+        if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue; // 分隔行
+        tRows.push(cells);
+        continue;
+      }
+      flushTable();
       if (/^[-*·]\s+/.test(line)) {
         if (!inList) { html += '<ul>'; inList = true; }
         html += '<li>' + inline(line.replace(/^[-*·]\s+/, '')) + '</li>';
@@ -1295,6 +1336,7 @@ body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6
       html += '<p>' + inline(line) + '</p>';
     }
     if (inList) html += '</ul>';
+    flushTable();
     return html;
   }
 
@@ -1702,12 +1744,98 @@ body.dark .quickbar button{background:#253241;border-color:#3a4a5e;color:#cdd8e6
     const seed = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
     return FORTUNES[seed % FORTUNES.length].replace('_comparison', '比较');
   }
+  function fortuneShare(text, d) {
+    const W = 750, H = 1050;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#fdf6ec'); bg.addColorStop(1, '#f4e2cd');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#b98d5a'; ctx.lineWidth = 4;
+    ctx.strokeRect(28, 28, W - 56, H - 56);
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(42, 42, W - 84, H - 84);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#8a5a2b';
+    ctx.font = '28px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText('🎋 小水签筒', W / 2, 130);
+    ctx.fillStyle = '#b98d5a';
+    ctx.font = '20px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText((d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日 · 每日运势', W / 2, 172);
+    ctx.fillText('— ❖ —', W / 2, 235);
+    ctx.fillStyle = '#4a3520';
+    ctx.font = '34px "PingFang SC","Microsoft YaHei",sans-serif';
+    const maxWidth = W - 200, lh = 56;
+    let y = 330, lineBuf = '';
+    const wrap = (str) => {
+      lineBuf = '';
+      for (const ch of str) {
+        if (ctx.measureText(lineBuf + ch).width > maxWidth) {
+          ctx.fillText(lineBuf, W / 2, y); y += lh; lineBuf = ch;
+        } else lineBuf += ch;
+      }
+      if (lineBuf) { ctx.fillText(lineBuf, W / 2, y); y += lh; }
+    };
+    const parts = text.split('。');
+    parts.forEach((seg, idx) => {
+      if (seg.trim()) wrap(seg.trim().replace(/^，|，$/, '') + (idx === parts.length - 1 ? '' : '。'));
+    });
+    ctx.fillStyle = '#b98d5a';
+    ctx.font = '20px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText('由「小水」生成 · 识景点 / 排行程 / 每日运势', W / 2, H - 90);
+    const a = document.createElement('a');
+    a.href = cv.toDataURL('image/png');
+    a.download = '今日运势签.png';
+    a.click();
+  }
+
+  /* ── 新手引导（首次访问 3 步浮层） ── */
+  (function initTour(){
+    if (localStorage.getItem('xs_tour')) return;
+    const STEPS = [
+      { ico: '📷', t: '上传照片，认出景点', p: '拍到不认识的建筑或地标？发张照片，AI 告诉你这是哪儿，还附上天气和周边推荐。' },
+      { ico: '🗓️', t: '一句话，排行程', p: '输入「帮我安排北京一日游」，自动按上午→中午→晚上规划路线，还能 📅 一键导出到手机日历。' },
+      { ico: '🌍', t: '地点都在地图上', p: '每次查询的结果会在右侧地图标出，点地点卡片看详情，还能收藏、加购物清单。悄悄说：多点点桌宠有惊喜～' },
+    ];
+    let step = 0;
+    const mask = document.createElement('div');
+    mask.className = 'tour-mask';
+    function render() {
+      const st = STEPS[step];
+      mask.innerHTML = '<div class="tour-card">'
+        + '<div class="tour-ico">' + st.ico + '</div>'
+        + '<h3>' + st.t + '</h3><p>' + st.p + '</p>'
+        + '<div class="tour-dots">' + STEPS.map((_, i) => '<i class="' + (i === step ? 'on' : '') + '"></i>').join('') + '</div>'
+        + '<div class="tour-btns">'
+        + '<button id="tourSkip">跳过</button>'
+        + '<button id="tourNext" class="primary">' + (step === STEPS.length - 1 ? '开始体验 🎉' : '下一步') + '</button>'
+        + '</div></div>';
+    }
+    mask.addEventListener('click', function(e){
+      if (e.target === mask) { finish(); return; }
+      if (e.target.id === 'tourSkip') { finish(); return; }
+      if (e.target.id === 'tourNext') {
+        if (step === STEPS.length - 1) finish();
+        else { step++; render(); }
+      }
+    });
+    function finish(){ mask.remove(); localStorage.setItem('xs_tour', '1'); }
+    render();
+    document.body.appendChild(mask);
+  })();
+
   const fortuneBtn = document.getElementById('fortuneBtn');
   if (fortuneBtn) fortuneBtn.addEventListener('click', function(){
     if (state.busy) return;
     const d = new Date();
     const line = '🎋 「小水签筒」' + (d.getMonth() + 1) + '月' + d.getDate() + '日运势\n\n' + dailyFortune();
-    appendMessage('assistant', line);
+    const bubbleEl = appendMessage('assistant', line);
+    const shareB = document.createElement('button');
+    shareB.className = 'share-btn';
+    shareB.textContent = '🖼️ 生成签文分享图';
+    shareB.addEventListener('click', function(){ fortuneShare(dailyFortune(), d); });
+    bubbleEl.appendChild(shareB);
     const pb = document.getElementById('petBubble');
     if (pb) { pb.textContent = '今天的运势，我帮你抽好啦～'; pb.hidden = false;
               setTimeout(function(){ pb.hidden = true; }, 3200); }

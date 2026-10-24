@@ -59,12 +59,15 @@ TYPE_KEYWORDS = {
 
 INTENT_PROMPT = """你是"小水"，一个出行决策助手。判断用户这句话的意图，严格输出 JSON，不要输出任何其他文字：
 {
-  "intent": "shopping|hotel|sightseeing|food|plan|spot|chat|discover|buy",
+  "intent": "shopping|hotel|sightseeing|food|plan|spot|chat|discover|buy|compare",
   "city": "城市名，没有则为 null；只说了城市名（如"深圳"）时 intent 填 discover",
   "preference": "偏好关键词，如 高端/亲子/性价比，没有则为 null",
-  "budget": "预算金额（数字，元），没提到则为 null"
+  "budget": "预算金额（数字，元），没提到则为 null",
+  "target_a": "对比意图时第一个对比对象/关键词（如 万象城），没有则为 null",
+  "target_b": "对比意图时第二个对比对象/关键词，没有则为 null"
 }
-规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，找餐厅/美食/吃饭/找吃的=food，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover，想买某样东西/求选购建议（如"我想买个相机5000以内"）=buy。"""
+规则：找商场=shopping，找酒店=hotel，找景点=sightseeing，找餐厅/美食/吃饭/找吃的=food，安排行程/一日游/两日游/怎么玩=plan，上传图片=spot，打招呼闲聊=chat，只给城市名=discover，想买某样东西/求选购建议（如"我想买个相机5000以内"）=buy，
+对比两个地点/商场/选项哪个好（如"万象城和国贸哪个好"）=compare 并填 target_a/target_b。"""
 
 REPLY_PROMPT = """你是"小水"，一个亲切的出行决策助手。根据工具查到的真实地点数据，用口语化中文回答用户，像朋友推荐一样。
 
@@ -541,6 +544,77 @@ def _product_result(env: dict, prod: dict, city_hint: str = "") -> dict:
             "product": prod, "map_image": ""}
 
 
+# ─── 对比模式 ───────────────────────────────────────────────
+
+def _compare_row(poi: dict) -> dict:
+    return {
+        "name": poi.get("name") or "未知",
+        "type": (poi.get("type") or "").split(";")[0] or "未知",
+        "rating": str(poi.get("rating") or "暂无评分"),
+        "address": poi.get("address") or "暂无地址",
+        "lat": poi.get("lat"), "lng": poi.get("lng"),
+    }
+
+
+def _run_compare(env: dict, message: str, city: str, target_a: str, target_b: str) -> dict:
+    if not city:
+        return {"reply": f"想对比「{target_a}」和「{target_b}」，它们在哪个城市呀？告诉我城市名，我马上帮你查～",
+                "points": []}
+    if not env.get("amap_key"):
+        return {"reply": "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你查地点做对比。",
+                "points": []}
+
+    best_a = best_b = None
+    for kw, holder in ((target_a, "a"), (target_b, "b")):
+        raw = _amap_search(env, city, kw, limit=4)
+        if not raw:
+            continue
+        pois = _filter_pois(raw, "shopping") or raw
+        best = _compare_row(pois[0])
+        if holder == "a":
+            best_a = best
+        else:
+            best_b = best
+
+    if not best_a and not best_b:
+        return {"reply": f"在「{city}」没查到「{target_a}」或「{target_b}」的数据，确认下名字或换个地标试试～",
+                "points": []}
+    if not best_b:
+        best_b = {"name": target_b, "type": "未查到", "rating": "-", "address": "-"}
+    if not best_a:
+        best_a = {"name": target_a, "type": "未查到", "rating": "-", "address": "-"}
+
+    table = (
+        f"| 对比项 | {best_a['name']} | {best_b['name']} |\n"
+        f"| --- | --- | --- |\n"
+        f"| 类型 | {best_a['type']} | {best_b['type']} |\n"
+        f"| 评分 | {best_a['rating']} | {best_b['rating']} |\n"
+        f"| 地址 | {best_a['address']} | {best_b['address']} |"
+    )
+
+    prompt = (
+        f"用户想对比「{best_a['name']}」和「{best_b['name']}」（城市：{city}），原始需求：{message}\n"
+        f"查到的数据：A={json.dumps(best_a, ensure_ascii=False)}；B={json.dumps(best_b, ensure_ascii=False)}\n\n"
+        f"上面已经有一张数据对比表了，你不要再重复表格，只需要："
+        f"1）用 2-3 句话给出结论和建议（适合什么人、什么时候去哪个）；"
+        f"2）数据里没有的信息（如价格、人流量）不要编。"
+    )
+    try:
+        comment = _chat(env, [{"role": "system", "content": REPLY_PROMPT},
+                              {"role": "user", "content": prompt}], temperature=0.4)
+    except Exception as e:
+        comment = f"（详细点评没生成成功：{str(e)[:80]}）"
+
+    reply = f"📍 **{best_a['name']} vs {best_b['name']}**\n\n{table}\n\n{comment}"
+    points = []
+    seen = set()
+    for poi in (best_a, best_b):
+        if poi.get("name") and poi["name"] not in seen and poi.get("lat"):
+            seen.add(poi["name"])
+            points.append(poi)
+    return {"reply": reply, "points": points, "map_image": "", "city": city}
+
+
 # ─── 购物导购 ───────────────────────────────────────────────
 
 def _run_buy(env: dict, message: str, city: str, budget=None) -> dict:
@@ -671,6 +745,9 @@ def run(env: dict, message: str, history: list | None = None,
 
     if intent == "buy":
         return _run_buy(env, message, city, data.get("budget"))
+
+    if intent == "compare" and data.get("target_a") and data.get("target_b"):
+        return _run_compare(env, message, city, data["target_a"], data["target_b"])
 
     # 3) 按意图查高德
     if intent == "discover":
