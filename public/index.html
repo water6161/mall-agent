@@ -2101,7 +2101,7 @@ html, body {
 </script>
 
 
-<!-- ── Live2D 立绘切换（官方免费示例模型 Hiyori） ── -->
+<!-- ── Live2D 立绘切换（官方免费示例模型 Natori） ── -->
 <button id="petSwap" title="切换 Live2D 立绘 / 阿水桌宠">🎭</button>
 <style>
 #petSwap {
@@ -2134,8 +2134,8 @@ html, body {
 </style>
 <script>
 (() => {
-  const MODEL_URL = 'https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json';
-  const LINES = ['你好呀，我是 Hiyori～', '看，我会眨眼哦！', '把鼠标在我脸上移移看？', '点我会有动作哦～', '再点一次 🎭 换回阿水'];
+  const MODEL_URL = 'https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Natori/Natori.model3.json';
+  const LINES = ['哟，我是名取，有事找我？', '看，我会眨眼哦！', '把鼠标在我脸上移移看？', '点我会有动作哦～', '再点一次 🎭 换回阿水'];
   let active = false, loading = false, app = null, model = null, bubbleTimer = null;
 
   const btn = document.getElementById('petSwap');
