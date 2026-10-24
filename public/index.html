@@ -710,6 +710,31 @@ body.dark .composer, body.dark .logo { background: var(--card); color: var(--tex
 body.dark textarea#input { background: var(--bg); color: var(--text); }
 body.dark .pet-body, body.dark .logo-avatar { background-color: var(--card); border-color: var(--border); }
 
+
+/* 成就徽章 */
+.badge-item { display:flex; align-items:center; gap:6px; font-size:12.5px; }
+.badge-item.locked { opacity:.38; filter:grayscale(1); }
+.badge-item b { font-weight:600; }
+/* 天气背景联动（固定层，整页轻微氛围） */
+body.wx-rain::after, body.wx-sunny::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:6;
+}
+body.wx-rain::after {
+  background:repeating-linear-gradient(115deg,transparent 0 14px,rgba(120,160,220,.07) 14px 15px);
+  animation:rainMove .6s linear infinite;
+}
+@keyframes rainMove { to { background-position:60px 90px; } }
+body.wx-sunny::after {
+  background:radial-gradient(circle at 78% 8%, rgba(255,214,112,.16), transparent 55%);
+}
+/* 桌宠彩蛋动画 */
+#pet.egg .pet-body { animation:eggDance .8s ease-in-out 2; }
+@keyframes eggDance {
+  0%,100% { transform:rotate(0) scale(1); }
+  25% { transform:rotate(-14deg) scale(1.1); }
+  75% { transform:rotate(14deg) scale(1.1); }
+}
+
 </style>
 <style>
 :root {
@@ -1124,6 +1149,8 @@ html, body {
     <button class="new-chat" id="newChat">＋ 新对话</button>
     <div class="side-title">🛒 购物清单 <button class="list-add" id="listAdd" title="添加">＋</button></div>
     <div class="history" id="listList"></div>
+    <div class="side-title">🏅 成就</div>
+    <div class="history" id="badgeList"></div>
     <div class="side-title">我的收藏</div>
     <div class="history" id="favList"></div>
     <div class="side-title">最近对话</div>
@@ -1359,6 +1386,7 @@ html, body {
         name: p.name, address: p.address, rating: p.rating,
         lng: p.lng, lat: p.lat, category: p.category, time: Date.now(),
       });
+      bumpStat('fav');
       if (btn) { btn.textContent = '❤️'; btn.title = '取消收藏'; }
     }
     saveFavs(list);
@@ -1575,7 +1603,28 @@ html, body {
       }).addTo(instance);
     }
 
+    if (valid[0]) wxCheck(valid[0].lat, valid[0].lng);
     requestAnimationFrame(invalidate);
+  }
+
+
+  /* ── 天气背景联动（Open-Meteo 免费接口） ── */
+  let wxDone = false;
+  function wxApply(code) {
+    document.body.classList.remove('wx-rain', 'wx-sunny');
+    if ([51,53,55,61,63,65,67,71,73,75,77,80,81,82,85,86,95,96,99].includes(code))
+      document.body.classList.add('wx-rain');
+    else if (code <= 1) document.body.classList.add('wx-sunny');
+  }
+  function wxCheck(lat, lng) {
+    if (wxDone || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    wxDone = true;
+    fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lng +
+          '&current_weather=true')
+      .then(r => r.json())
+      .then(d => { const c = d && d.current_weather && d.current_weather.weathercode;
+                   if (c !== undefined) wxApply(c); })
+      .catch(() => {});
   }
 
   /* ── 发送 ─────────────────────────────── */
@@ -1587,6 +1636,7 @@ html, body {
 
     state.busy = true;
     sendBtn.disabled = true;
+    if (image) bumpStat('spot');
 
     const shownText = text || '这张照片里是哪个景点？帮我看看';
     appendMessage('user', text || '（上传了一张照片）', image);
@@ -1623,6 +1673,7 @@ html, body {
       state.messages.push({ role: 'assistant', content: reply });
 
       if (data.points && data.points.length) renderMap(data.points, !!data.plan);
+      if (data.plan) bumpStat('plan');
       saveSession();
     } catch (err) {
       removeTyping();
@@ -1815,6 +1866,7 @@ html, body {
       recog.start();
       recogOn = true;
       micBtn.classList.add('recording');
+      bumpStat('voice');
     } catch { /* 重复启动忽略 */ }
   });
 
@@ -1956,6 +2008,7 @@ html, body {
     if (!t) return;
     const items = loadList();
     items.unshift({ id: Date.now() + Math.random(), text: t.slice(0, 80), done: false });
+    bumpStat('list');
     saveList(items);
   }
 
@@ -1992,9 +2045,45 @@ html, body {
     if (v) addToList(v);
   });
 
+
+  /* ── 成就徽章墙 ───────────────────────── */
+  const LS_STATS = 'xs_stats';
+  const badgeList = $('badgeList');
+  const BADGES = [
+    { key:'spot',  icon:'🥉', name:'初次识图', need:1,  desc:'识别 1 次照片' },
+    { key:'plan',  icon:'🗺️', name:'计划通',   need:5,  desc:'生成 5 次行程' },
+    { key:'fav',   icon:'💝', name:'收藏家',   need:10, desc:'累计收藏 10 个地点' },
+    { key:'list',  icon:'🛍️', name:'购物达人', need:10, desc:'清单累计添加 10 件' },
+    { key:'voice', icon:'🎤', name:'先声夺人', need:1,  desc:'使用 1 次语音输入' },
+  ];
+  function loadStats() {
+    try { return Object.assign({spot:0,plan:0,fav:0,list:0,voice:0},
+           JSON.parse(localStorage.getItem(LS_STATS) || '{}')); }
+    catch { return {spot:0,plan:0,fav:0,list:0,voice:0}; }
+  }
+  function bumpStat(key) {
+    const st = loadStats();
+    st[key] = (st[key] || 0) + 1;
+    localStorage.setItem(LS_STATS, JSON.stringify(st));
+    renderBadges();
+  }
+  function renderBadges() {
+    if (!badgeList) return;
+    const st = loadStats();
+    badgeList.innerHTML = BADGES.map((b) => {
+      const got = (st[b.key] || 0) >= b.need;
+      return `<div class="history-item badge-item ${got ? '' : 'locked'}"
+                   title="${b.desc}（进度 ${Math.min(st[b.key]||0,b.need)}/${b.need}）">
+                <span>${b.icon}</span><b>${got ? b.name : '???'}</b>
+                <span style="margin-left:auto;opacity:.7">${Math.min(st[b.key]||0,b.need)}/${b.need}</span>
+              </div>`;
+    }).join('');
+  }
+
   renderHistory();
   renderFavs();
   renderList();
+  renderBadges();
   bindWelcome();
   inputEl.focus();
 })();
@@ -2128,12 +2217,28 @@ html, body {
   }
 
   // 点击：随机台词（拖动不算）
+  const EGG_LINES = [
+    '🎉 恭喜发现隐藏彩蛋！',
+    '其实我是 Mall-Agent 的首席代言官…',
+    '再点也不会变出萧逸本尊的（笑）',
+    '你是我见过最有耐心的用户！',
+    '彩蛋收集家就是你没错了 🏅',
+  ];
+  let eggCount = 0;
   pet.addEventListener('click', () => {
     if (dragMoved) { dragMoved = false; return; }
     if (!pet.classList.contains('thinking')) {
-      say(IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)]);
-      body.style.transform = 'scale(1.12)';
-      setTimeout(() => { body.style.transform = ''; }, 200);
+      eggCount++;
+      if (eggCount >= 10) {
+        eggCount = 0;
+        pet.classList.add('egg');
+        say(EGG_LINES[Math.floor(Math.random() * EGG_LINES.length)], 5000);
+        setTimeout(() => pet.classList.remove('egg'), 1800);
+      } else {
+        say(IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)]);
+        body.style.transform = 'scale(1.12)';
+        setTimeout(() => { body.style.transform = ''; }, 200);
+      }
     }
   });
 
