@@ -1218,6 +1218,7 @@ body.dark .tour-card p{color:#8fa2b8}
         <button data-q="附近有什么性价比高的酒店？">🛏️ 找酒店</button>
         <button data-q="附近有什么适合逛街购物的商场？">🛍️ 买东西</button>
         <button id="fortuneBtn">🎋 今日运势</button>
+        <button id="diceBtn">🎲 灵感骰子</button>
       </div>
       <div class="attach-preview" id="attachPreview" hidden>
         <img id="attachThumb" alt="待识别照片" />
@@ -1789,6 +1790,30 @@ body.dark .tour-card p{color:#8fa2b8}
     a.download = '今日运势签.png';
     a.click();
   }
+
+  /* ── 灵感骰子 ── */
+  const IDEAS = [
+    { icon: '🍜', text: '去这条街最老的一家店试试——开了十年以上的馆子，手艺都不会差。' },
+    { icon: '📷', text: '给自己一个任务：今天拍到三张「没有人」的好照片。人流之外，城市才露出真面目。' },
+    { icon: '🚶', text: '随机选一条没走过的巷子走十分钟，遇到岔路选更窄的那条。' },
+    { icon: '☕', text: '找一家本地人扎堆、菜单没有图片的咖啡馆，点招牌就好。' },
+    { icon: '🏛️', text: '去博物馆只看一个展厅，看懂三件文物，比走马观花一整天更有收获。' },
+    { icon: '🌆', text: '提前查好今天的日落时间，找一个高处等太阳落下——城市亮灯的瞬间最动人。' },
+    { icon: '🛍️', text: '逛逛本地的老牌菜市场或集市，那里有这座城市最真实的味道。' },
+    { icon: '📖', text: '进一家独立书店，随机翻开一本书读十分钟，把那句打动你的话记下来。' },
+    { icon: '🎡', text: '去坐一次全城最老的摩天轮或者最短的公交线路，用别的方式看这座城市。' },
+    { icon: '🌃', text: '晚饭后步行 20 分钟没有目的地，走到哪算哪——这是认识一个城市最快的方式。' },
+  ];
+  const diceBtn = document.getElementById('diceBtn');
+  if (diceBtn) diceBtn.addEventListener('click', function(){
+    if (state.busy) return;
+    const idea = IDEAS[Math.floor(Math.random() * IDEAS.length)];
+    const d = new Date();
+    appendMessage('assistant', '🎲 灵感骰子掷出了——\n\n' + idea.icon + ' ' + idea.text + '\n\n心动的话，我可以马上帮你查相关的地方！');
+    const pb = document.getElementById('petBubble');
+    if (pb) { pb.textContent = '骰子说：' + idea.icon + ' 就它了！'; pb.hidden = false;
+              setTimeout(function(){ pb.hidden = true; }, 3200); }
+  });
 
   /* ── 新手引导（首次访问 3 步浮层） ── */
   (function initTour(){
