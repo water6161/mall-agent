@@ -1919,18 +1919,30 @@ body.dark .tour-card p{color:#8fa2b8}
 
   /* ── 发送 ─────────────────────────────── */
   async function requestReply(shownText, image) {
-    const res = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Makers-Conversation-Id': state.cid,
-      },
-      body: JSON.stringify({
-        message: shownText,
-        history: state.messages.slice(-9),
-        image: image || undefined,
-      }),
-    });
+    // 识图最长可能 60～90 秒，超过阈值就主动中断，避免页面永远卡在"发送中"
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 75000);
+    let res;
+    try {
+      res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Makers-Conversation-Id': state.cid,
+        },
+        body: JSON.stringify({
+          message: shownText,
+          history: state.messages.slice(-9),
+          image: image || undefined,
+        }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('请求超时（75 秒没有响应），可能是图片太大或服务繁忙');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(`HTTP ${res.status}${detail ? '：' + detail.slice(0, 120) : ''}`);
