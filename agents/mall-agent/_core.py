@@ -10,15 +10,55 @@
 
 import json
 import re
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 DEFAULT_BASE_URL = "https://ai-gateway.edgeone.link/v1"
 DEFAULT_MODEL = "@makers/deepseek-v4-flash"
 DEFAULT_VISION_MODEL = "qwen3-vl-plus"
 
 TIMEOUT = 45
+
+
+# ─── 进程内 TTL 缓存 ────────────────────────────────────────
+# 边缘函数实例存活期间有效：同一地点/同一问题的重复请求不再打外部 API，
+# 既省配额也降延迟。进程重启即失效，无需额外存储依赖。
+
+_CACHE: dict = {}
+_CACHE_MAX = 300
+
+
+def _cache_get(key: str):
+    item = _CACHE.get(key)
+    if not item:
+        return None
+    expire, value = item
+    if expire < time.time():
+        _CACHE.pop(key, None)
+        return None
+    return value
+
+
+def _cache_set(key: str, value, ttl: float) -> None:
+    if len(_CACHE) >= _CACHE_MAX:
+        now = time.time()
+        for k in [k for k, (exp, _) in list(_CACHE.items()) if exp < now]:
+            _CACHE.pop(k, None)
+        if len(_CACHE) >= _CACHE_MAX:
+            _CACHE.clear()
+    _CACHE[key] = (time.time() + ttl, value)
+
+
+def _log(stage: str, started: float, **extra) -> None:
+    """轻量可观测性：把关键阶段耗时打到 stderr，便于线上排查慢请求。"""
+    detail = " ".join(f"{k}={v}" for k, v in extra.items() if v not in (None, ""))
+    print(f"[mall-agent] {stage} {int((time.time() - started) * 1000)}ms {detail}".rstrip(),
+          file=sys.stderr)
+
 
 
 # ─── HTTP（标准库） ─────────────────────────────────────────
@@ -136,6 +176,11 @@ _WMO = {
 def _weather_amap(env: dict, city: str) -> str:
     if not env.get("amap_key") or not city:
         return ""
+    # 天气变化慢，缓存 30 分钟：一次问答里多处引用天气时不再重复请求
+    ck = ("weather", city)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
     try:
         status, text = _get_json("https://restapi.amap.com/v3/geocode/geo",
                                  {"address": city, "key": env["amap_key"]}, 10)
@@ -159,7 +204,9 @@ def _weather_amap(env: dict, city: str) -> str:
                 "明天" if len(parts) == 1 else "后天")
             parts.append(f"{day}{c.get('dayweather') or ''} "
                          f"{c.get('nighttemp') or '?'}~{c.get('daytemp') or '?'}°C")
-        return "、".join(parts)
+        out = "、".join(parts)
+        _cache_set(ck, out, 1800)
+        return out
     except Exception:
         return ""
 
@@ -200,9 +247,11 @@ SPOT_PROMPT = """识别这张照片里的景点或地标。严格输出 JSON，�
   "name": "景点/地标正式名称，没认出来则为 null",
   "city": "所在城市，不确定则为 null",
   "landmark_type": "类型，如 古建筑/自然风光/城市地标",
-  "description": "一句话说明画面关键特征，30字以内"
+  "description": "一句话说明画面关键特征，30字以内",
+  "confidence": 0.0-1.0 之间的数字，表示你对该判断的把握程度
 }
-画面里没有可识别景点时 found 填 false。"""
+画面里没有可识别景点时 found 填 false。
+如果有多个可能答案但拿不准，name 填最可能的一个，并把 confidence 压到 0.6 以下。"""
 
 
 # ─── 环境 ───────────────────────────────────────────────────
@@ -292,6 +341,11 @@ def _amap_search(env: dict, city: str, keyword: str, limit: int = 8) -> list:
     key = env.get("amap_key")
     if not key or not city:
         return []
+    # 同一「城市+关键词」在 10 分钟内重复查询直接命中缓存（POI 数据变化很慢）
+    ck = ("poi", city, keyword, limit)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return list(cached)
     try:
         status, text = _get_json(
             "https://restapi.amap.com/v3/place/text",
@@ -332,6 +386,7 @@ def _amap_search(env: dict, city: str, keyword: str, limit: int = 8) -> list:
             "lng": lng,
             "lat": lat,
         })
+    _cache_set(ck, pois, 600)
     return pois
 
 
@@ -340,6 +395,33 @@ def _filter_pois(pois: list, category: str) -> list:
     if not keys:
         return pois
     return [p for p in pois if any(k in (p.get("type") or "") for k in keys)]
+
+
+def _search_one(env: dict, city: str, keyword: str, category: str) -> list:
+    """查一类地点：类型过滤太严把结果全滤掉时回退原始结果，避免有数据却显示"查不到"。"""
+    raw = _amap_search(env, city, keyword, limit=8)
+    return _filter_pois(raw, category) or raw
+
+
+def _search_many(env: dict, city: str, plan: list, stop_when_found: bool = False):
+    """按 plan 依次产出 (关键词, 类别, POI列表)。
+
+    plan 有多项（如"随便逛逛"要同时查吃/玩/买/住）时并发请求高德，
+    把 4 次串行外部调用压成 1 轮往返；兜底场景需要"查到就停"，仍走串行。
+    """
+    if stop_when_found or len(plan) <= 1:
+        for kw, cat in plan:
+            yield kw, cat, _search_one(env, city, kw, cat)
+        return
+
+    with ThreadPoolExecutor(max_workers=min(4, len(plan))) as pool:
+        futures = [pool.submit(_search_one, env, city, kw, cat) for kw, cat in plan]
+        for (kw, cat), fut in zip(plan, futures):
+            try:
+                pois = fut.result()
+            except Exception:
+                pois = []
+            yield kw, cat, pois
 
 
 def _keyword(preference: str, category: str) -> str:
@@ -441,12 +523,17 @@ def recognize_spot(env: dict, image_data_uri: str) -> dict:
         content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
     data = _parse_json(content)
     name = data.get("name") or None
+    try:
+        confidence = float(data.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = 0.8  # 模型没给就按"一般可信"处理，不影响主流程
     return {
         "found": bool(data.get("found")) and bool(name),
         "name": name,
         "city": data.get("city") or None,
         "landmark_type": data.get("landmark_type") or "",
         "description": data.get("description") or "",
+        "confidence": min(1.0, max(0.0, confidence)),
     }
 
 
@@ -657,9 +744,11 @@ def _spot_result(env: dict, spot: dict) -> dict:
     points = [dict(p, category="sightseeing") for p in _filter_pois(pois, "sightseeing")]
 
     context = _poi_digest(points)
+    conf = spot.get("confidence", 0.8)
     prompt = (
         f"用户上传了一张照片，识别结果：{spot['name']}（{city or '城市未知'}），"
         f"类型 {spot.get('landmark_type') or '未知'}，画面特征：{spot.get('description') or ''}。\n"
+        f"识别置信度：{conf:.2f}（低于 0.6 说明只是较有把握的猜测，语气要留有余地）。\n"
         f"高德查到的相关信息：\n{context or '（无）'}\n\n"
         f"请告诉用户这是哪儿，并给出实用游玩建议（开放时间/门票等没查到的不要编）。"
         f"如果高德数据里有同城其他相关景点，可以顺带推荐 1-2 个。"
@@ -677,6 +766,10 @@ def _spot_result(env: dict, spot: dict) -> dict:
                             points[0].get("lng") if points else None)
     if weather:
         reply += f"\n\n🌤️ 顺带提醒：{city} {weather}，出行注意天气～"
+
+    # 低置信度时主动说明，避免把猜测当结论（也给了用户纠错入口）
+    if conf < 0.6:
+        reply += "\n\n> 💡 这张照片我只能看个大概，如果认错了，可以补一句景点名字或换张更清晰的照片～"
 
     return {"reply": reply + SPOT_FOLLOWUP,
             "points": [p for p in points if p.get("lng")],
@@ -702,6 +795,7 @@ def _history_messages(history: list | None) -> list:
 def run(env: dict, message: str, history: list | None = None,
         image: str | None = None) -> dict:
     """返回 {reply, points, map_image, spot}。"""
+    started = time.time()
     message = (message or "").strip()
     history_msgs = _history_messages(history)
 
@@ -719,15 +813,23 @@ def run(env: dict, message: str, history: list | None = None,
     if not message:
         return {"reply": "在的～想找商场、酒店、景点，还是发张照片让我认认是哪儿？", "points": []}
 
-    # 2) 单次 LLM 判断意图
-    try:
-        raw = _chat(env, [{"role": "system", "content": INTENT_PROMPT},
-                          {"role": "user", "content": message}],
-                    temperature=0)
-    except Exception as e:
-        return {"reply": f"😵‍💫 模型调用失败：{str(e)[:160]}", "points": []}
+    # 2) 单次 LLM 判断意图（同一句话 + 无上下文时走缓存，省一次模型调用）
+    data = None
+    ck = ("intent", message) if not history_msgs else None
+    if ck:
+        data = _cache_get(ck)
+    if data is None:
+        try:
+            raw = _chat(env, [{"role": "system", "content": INTENT_PROMPT},
+                              {"role": "user", "content": message}],
+                        temperature=0)
+        except Exception as e:
+            return {"reply": f"😵‍💫 模型调用失败：{str(e)[:160]}", "points": []}
+        data = _parse_json(raw) or {}
+        if ck and data.get("intent"):
+            _cache_set(ck, data, 3600)
 
-    data = _parse_json(raw) or {}
+    _log("intent", started, intent=data.get("intent"), city=data.get("city"))
     intent = data.get("intent") or "chat"
     city = data.get("city") or ""
     preference = data.get("preference") or ""
@@ -773,12 +875,7 @@ def run(env: dict, message: str, history: list | None = None,
         }
 
     points = []
-    for kw, cat in plan:
-        raw = _amap_search(env, city, kw, limit=8)
-        pois = _filter_pois(raw, cat)
-        # 类型过滤太严把结果全滤掉时，回退到原始结果，避免有数据却显示"查不到"
-        if not pois and raw:
-            pois = raw
+    for kw, cat, pois in _search_many(env, city, plan):
         for poi in pois[:6]:
             points.append(dict(poi, category=cat))
 
@@ -790,15 +887,13 @@ def run(env: dict, message: str, history: list | None = None,
             (CATEGORY_BASE["sightseeing"], "sightseeing"),
             (CATEGORY_BASE["hotel"], "hotel"),
         ] if intent == "discover" else [(CATEGORY_BASE.get(plan[0][1], "景点"), plan[0][1])]
-        for kw, cat in fallback_plan:
-            raw = _amap_search(env, city, kw, limit=8)
-            pois = _filter_pois(raw, cat)
-            if not pois and raw:
-                pois = raw
+        for kw, cat, pois in _search_many(env, city, fallback_plan, stop_when_found=True):
             for poi in pois[:6]:
                 points.append(dict(poi, category=cat))
             if points:
                 break
+
+    _log("amap", started, city=city, points=len(points))
 
     if not points:
         return {

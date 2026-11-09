@@ -910,7 +910,20 @@ html, body {
 .msg .bubble strong { color: #1657c4; }
 .msg .bubble ul { margin: 4px 0 6px; padding-left: 20px; }
 .msg .bubble li { margin: 2px 0; }
-.msg .bubble img { max-width: 220px; border-radius: 10px; display: block; margin-bottom: 6px; }
+.msg .bubble img { max-width: 220px; border-radius: 10px; display: block; margin-bottom: 6px; cursor: zoom-in; }
+.img-zoom {
+  position: fixed; inset: 0; z-index: 9999; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(0,0,0,.78); backdrop-filter: blur(4px);
+  animation: zoomIn .18s ease;
+}
+.img-zoom img { max-width: 88vw; max-height: 86vh; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+.img-zoom .zoom-close {
+  position: absolute; top: 18px; right: 22px; width: 38px; height: 38px;
+  border: none; border-radius: 50%; cursor: pointer; font-size: 20px;
+  background: rgba(255,255,255,.16); color: #fff;
+}
+@keyframes zoomIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 
 .typing span {
   display: inline-block; width: 6px; height: 6px; margin-right: 4px;
@@ -919,6 +932,10 @@ html, body {
 }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }
+.typing .typing-tip {
+  display: inline-block; margin-left: 8px; font-size: 12px;
+  font-style: normal; opacity: .72; vertical-align: 2px;
+}
 @keyframes blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
 
 /* ── 输入区 ───────────────────────────── */
@@ -1367,6 +1384,7 @@ body.dark .tour-card p{color:#8fa2b8}
       const img = document.createElement('img');
       img.src = image;
       img.alt = '上传的照片';
+      img.addEventListener('click', () => zoomImage(image));
       bubble.appendChild(img);
     }
     const body = document.createElement('div');
@@ -1392,13 +1410,23 @@ body.dark .tour-card p{color:#8fa2b8}
     return bubble;
   }
 
-  function appendTyping() {
+  function appendTyping(label) {
     hideWelcome();
     const wrap = document.createElement('div');
     wrap.className = 'msg bot';
     wrap.id = 'typingMsg';
-    wrap.innerHTML = '<div class="avatar">🧳</div>'
-      + '<div class="bubble typing"><span></span><span></span><span></span></div>';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble typing';
+    bubble.innerHTML = '<span></span><span></span><span></span>';
+    if (label) {
+      // 识别照片这类耗时更长的请求，给一句明确的进度说明，减少"卡住了"的错觉
+      const tip = document.createElement('i');
+      tip.className = 'typing-tip';
+      tip.textContent = label;
+      bubble.appendChild(tip);
+    }
+    wrap.innerHTML = '<div class="avatar">🧳</div>';
+    wrap.appendChild(bubble);
     chatEl.appendChild(wrap);
     scrollBottom();
   }
@@ -1410,6 +1438,29 @@ body.dark .tour-card p{color:#8fa2b8}
 
   function scrollBottom() {
     chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  /* ── 图片放大查看 ─────────────────────── */
+  function zoomImage(src) {
+    const box = document.createElement('div');
+    box.className = 'img-zoom';
+    const big = document.createElement('img');
+    big.src = src;
+    big.alt = '查看大图';
+    const close = document.createElement('button');
+    close.className = 'zoom-close';
+    close.type = 'button';
+    close.textContent = '✕';
+    close.setAttribute('aria-label', '关闭');
+    box.appendChild(big);
+    box.appendChild(close);
+    const dismiss = () => box.remove();
+    close.addEventListener('click', dismiss);
+    box.addEventListener('click', (e) => { if (e.target === box) dismiss(); });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { dismiss(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(box);
   }
 
   /* ── 收藏夹 ───────────────────────────── */
@@ -1867,45 +1918,32 @@ body.dark .tour-card p{color:#8fa2b8}
   });
 
   /* ── 发送 ─────────────────────────────── */
-  async function send() {
-    if (state.busy) return;
-    const text = inputEl.value.trim();
-    const image = state.pendingImage;
-    if (!text && !image) return;
+  async function requestReply(shownText, image) {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Makers-Conversation-Id': state.cid,
+      },
+      body: JSON.stringify({
+        message: shownText,
+        history: state.messages.slice(-9),
+        image: image || undefined,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${detail ? '：' + detail.slice(0, 120) : ''}`);
+    }
+    return res.json();
+  }
 
+  async function deliver(shownText, image) {
     state.busy = true;
     sendBtn.disabled = true;
-    if (image) bumpStat('spot');
-
-    const shownText = text || '这张照片里是哪个景点？帮我看看';
-    appendMessage('user', text || '（上传了一张照片）', image);
-    state.messages.push({ role: 'user', content: shownText });
-
-    inputEl.value = '';
-    autoGrow();
-    clearImage();
-    appendTyping();
-
+    appendTyping(image ? '正在识别照片，通常需要 5～15 秒…' : '');
     try {
-      const res = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Makers-Conversation-Id': state.cid,
-        },
-        body: JSON.stringify({
-          message: shownText,
-          history: state.messages.slice(-9),
-          image: image || undefined,
-        }),
-      });
-
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status}${detail ? '：' + detail.slice(0, 120) : ''}`);
-      }
-
-      const data = await res.json();
+      const data = await requestReply(shownText, image);
       removeTyping();
       const reply = data.reply || '抱歉，这次没生成出回复～';
       appendMessage('assistant', reply);
@@ -1916,13 +1954,46 @@ body.dark .tour-card p{color:#8fa2b8}
       saveSession();
     } catch (err) {
       removeTyping();
-      const msg = `😵‍💫 请求失败了：${err.message}\n\n稍后再试一次，或刷新页面重开对话～`;
-      appendMessage('assistant', msg);
+      renderRetry(err, shownText, image);
     } finally {
       state.busy = false;
       sendBtn.disabled = false;
       inputEl.focus();
     }
+  }
+
+  /* 失败提示 + 一键重试：沿用原问题与原图片，不重复插入用户气泡 */
+  function renderRetry(err, shownText, image) {
+    const bubbleEl = appendMessage('assistant',
+      `😵‍💫 请求失败了：${err.message}\n\n点下面的按钮重发一次就行，不用重新输入～`);
+    const retry = document.createElement('button');
+    retry.className = 'share-btn';
+    retry.type = 'button';
+    retry.textContent = '↻ 重试这次请求';
+    retry.addEventListener('click', () => {
+      if (state.busy) return;
+      retry.remove();
+      deliver(shownText, image);
+    });
+    bubbleEl.appendChild(retry);
+  }
+
+  async function send() {
+    if (state.busy) return;
+    const text = inputEl.value.trim();
+    const image = state.pendingImage;
+    if (!text && !image) return;
+
+    const shownText = text || '这张照片里是哪个景点？帮我看看';
+    appendMessage('user', text || '（上传了一张照片）', image);
+    state.messages.push({ role: 'user', content: shownText });
+    if (image) bumpStat('spot');
+
+    inputEl.value = '';
+    autoGrow();
+    clearImage();
+
+    await deliver(shownText, image);
   }
 
   /* ── 会话本地保存 ─────────────────────── */
