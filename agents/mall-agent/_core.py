@@ -31,6 +31,15 @@ TIMEOUT = 45
 _CACHE: dict = {}
 _CACHE_MAX = 300
 
+# 最近一次高德错误码（用于把「查不到」和「key 有问题」区分开）
+_AMAP_LAST_ERR = [""]
+_AMAP_ERR_HINT = {
+    "10001": "高德 Key 无效，请检查 AMAP_KEY 是否填对",
+    "10003": "高德 Key 今日配额已用完，明天再试或换一个 Key",
+    "10005": "高德 Key 开启了 IP 白名单，边缘函数出口 IP 不在名单里",
+    "10009": "高德 Key 类型不符，需要「Web服务」类型的 Key，不能选「Web端(JS API)」",
+}
+
 
 def _cache_get(key: str):
     item = _CACHE.get(key)
@@ -362,6 +371,10 @@ def _amap_search(env: dict, city: str, keyword: str, limit: int = 8) -> list:
         return []
 
     if data.get("status") != "1":
+        # 记录高德返回的错误码：区分「真的没这条数据」和「key 配额/权限有问题」
+        _AMAP_LAST_ERR[0] = str(data.get("infocode") or "")
+        print(f"[mall-agent] amap failed info={data.get('info')} infocode={data.get('infocode')}",
+              file=sys.stderr)
         return []
 
     pois = []
@@ -435,6 +448,75 @@ def _need_more_city_reply(city_keyword: str) -> str:
     return f"你想在哪个城市找{city_keyword}呀？告诉我城市名，我马上帮你查～"
 
 
+# ─── 意图快速通道（命中即跳过 LLM，降低首字延迟） ──────────
+# 只处理"关键词明确且单一"的句子；稍有歧义就交给模型，宁可慢一点也不猜错。
+
+CITY_LIST = (
+    "北京", "上海", "广州", "深圳", "成都", "杭州", "重庆", "西安", "南京", "武汉",
+    "苏州", "天津", "长沙", "郑州", "青岛", "宁波", "东莞", "沈阳", "合肥", "佛山",
+    "昆明", "哈尔滨", "济南", "厦门", "福州", "大连", "长春", "石家庄", "太原", "南昌",
+    "贵阳", "南宁", "兰州", "乌鲁木齐", "海口", "三亚", "珠海", "无锡", "温州", "常州",
+    "香港", "澳门", "台北",
+)
+
+FAST_RULES = (
+    ("plan", ("一日游", "两日游", "三日游", "四日游", "行程", "怎么玩", "玩几天",
+              "路线安排", "帮我安排", "规划")),
+    ("food", ("吃什么", "找吃的", "好吃的", "吃的", "好吃", "找餐厅", "美食", "吃饭",
+              "餐厅", "火锅", "小吃", "烧烤", "咖啡")),
+    ("hotel", ("酒店", "住哪", "住宿", "宾馆", "民宿", "客栈")),
+    ("shopping", ("商场", "购物中心", "逛街", "购物", "百货")),
+    ("sightseeing", ("景点", "玩什么", "打卡", "公园", "博物馆", "古镇", "风景区")),
+)
+
+# 出现这些词说明是决策型/多目标问题，交给模型处理更稳
+FAST_BAILOUT = ("对比", "哪个好", "哪个更", "还是", "推荐哪个", "预算", "以内",
+                "值得买", "值不值", "和", "跟", "?")
+
+
+def _quick_intent(message: str) -> dict | None:
+    text = (message or "").strip()
+    if not text or len(text) > 40:          # 长句往往带条件，交模型
+        return None
+    if any(b in text for b in FAST_BAILOUT):
+        return None
+
+    city = next((c for c in CITY_LIST if c in text), "")
+    if not city:
+        return None
+
+    hits = [intent for intent, words in FAST_RULES if any(w in text for w in words)]
+    if len(hits) != 1:                      # 0 个或命中多类都不猜
+        return None
+    return {"intent": hits[0], "city": city, "preference": None}
+
+
+def _rank_points(points: list, limit: int = 20) -> list:
+    """同名地点去重（保留评分高的）+ 按评分降序，地图上不出现重复标注。"""
+    best = {}
+    for p in points:
+        name = (p.get("name") or "").strip()
+        if not name:
+            continue
+        old = best.get(name)
+        if old is None:
+            best[name] = p
+            continue
+        try:
+            if float(p.get("rating") or 0) > float(old.get("rating") or 0):
+                best[name] = p
+        except (TypeError, ValueError):
+            pass
+
+    def score(p):
+        try:
+            return float(p.get("rating") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return sorted(best.values(), key=score, reverse=True)[:limit]
+
+
 # ─── 行程规划 ───────────────────────────────────────────────
 
 def _run_plan(env: dict, message: str, city: str, preference: str = "") -> dict:
@@ -447,17 +529,15 @@ def _run_plan(env: dict, message: str, city: str, preference: str = "") -> dict:
             "points": [],
         }
 
-    # 景点为主，捎带商圈（吃饭/购物），组成行程素材
+    # 景点为主，捎带商圈（吃饭/购物），组成行程素材（两类并发查询）
+    plan_items = [(_keyword(preference, "sightseeing"), "sightseeing"),
+                  (CATEGORY_BASE["shopping"], "shopping")]
     points = []
-    for kw, cat in [(_keyword(preference, "sightseeing"), "sightseeing"),
-                    (CATEGORY_BASE["shopping"], "shopping")]:
-        raw = _amap_search(env, city, kw, limit=8)
-        pois = _filter_pois(raw, cat)
-        if not pois and raw:
-            pois = raw
+    for _kw, cat, pois in _search_many(env, city, plan_items):
         for poi in pois[:6]:
             points.append(dict(poi, category=cat))
 
+    points = _rank_points(points, 12)
     if not points:
         return {"reply": f"在「{city}」暂时没查到能安排进行程的地点，"
                          f"换个城市或关键词试试～", "points": []}
@@ -651,9 +731,18 @@ def _run_compare(env: dict, message: str, city: str, target_a: str, target_b: st
         return {"reply": "⚠️ 还没配置高德地图 Key（AMAP_KEY），暂时没法帮你查地点做对比。",
                 "points": []}
 
+    # A、B 两个对象并发查询，对比不必等两次串行往返
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futs = [pool.submit(_amap_search, env, city, kw, 4) for kw in (target_a, target_b)]
+        raws = []
+        for fut in futs:
+            try:
+                raws.append(fut.result())
+            except Exception:
+                raws.append([])
+
     best_a = best_b = None
-    for kw, holder in ((target_a, "a"), (target_b, "b")):
-        raw = _amap_search(env, city, kw, limit=4)
+    for raw, target, holder in zip(raws, (target_a, target_b), ("a", "b")):
         if not raw:
             continue
         pois = _filter_pois(raw, "shopping") or raw
@@ -797,6 +886,8 @@ def run(env: dict, message: str, history: list | None = None,
     """返回 {reply, points, map_image, spot}。"""
     started = time.time()
     message = (message or "").strip()
+    if len(message) > 500:                  # 超长输入截断，避免 prompt 膨胀
+        message = message[:500]
     history_msgs = _history_messages(history)
 
     if not env.get("api_key"):
@@ -813,11 +904,14 @@ def run(env: dict, message: str, history: list | None = None,
     if not message:
         return {"reply": "在的～想找商场、酒店、景点，还是发张照片让我认认是哪儿？", "points": []}
 
-    # 2) 单次 LLM 判断意图（同一句话 + 无上下文时走缓存，省一次模型调用）
-    data = None
-    ck = ("intent", message) if not history_msgs else None
-    if ck:
+    # 2) 意图判定：规则快速通道 → 缓存 → LLM（逐级降级，能省一次模型调用就省）
+    data = _quick_intent(message) if not history_msgs else None
+    route = "rule" if data else "llm"
+    ck = ("intent", message) if (not data and not history_msgs) else None
+    if data is None and ck:
         data = _cache_get(ck)
+        if data is not None:
+            route = "cache"
     if data is None:
         try:
             raw = _chat(env, [{"role": "system", "content": INTENT_PROMPT},
@@ -829,7 +923,7 @@ def run(env: dict, message: str, history: list | None = None,
         if ck and data.get("intent"):
             _cache_set(ck, data, 3600)
 
-    _log("intent", started, intent=data.get("intent"), city=data.get("city"))
+    _log("intent", started, route=route, intent=data.get("intent"), city=data.get("city"))
     intent = data.get("intent") or "chat"
     city = data.get("city") or ""
     preference = data.get("preference") or ""
@@ -894,8 +988,16 @@ def run(env: dict, message: str, history: list | None = None,
                 break
 
     _log("amap", started, city=city, points=len(points))
+    points = _rank_points(points, 12)      # 去重 + 按评分排序，地图标注不重复
 
     if not points:
+        hint = _AMAP_ERR_HINT.get(_AMAP_LAST_ERR[0], "")
+        if hint:
+            return {
+                "reply": f"⚠️ 地图服务调用失败了：{hint}。\n"
+                         f"（错误码 {_AMAP_LAST_ERR[0]}）修好 Key 后马上就能查「{city}」的地点～",
+                "points": [],
+            }
         return {
             "reply": f"在「{city}」暂时没查到相关地点。可能是地图服务暂时不可用，"
                      f"你可以换个更具体的关键词（比如「万象城」「故宫」「如家酒店」）再试试～",

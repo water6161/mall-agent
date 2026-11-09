@@ -1299,6 +1299,26 @@ body.dark .tour-card p{color:#8fa2b8}
   const mapList = $('mapList');
   const historyList = $('historyList');
 
+  /* 安全写入：隐私模式 / 配额满时 localStorage 会抛错，这里兜住不让整页崩掉 */
+  function lsSet(key, value) {
+    try { localStorage.setItem(key, value); return true; }
+    catch (e) {
+      console.warn('localStorage 写入失败：', key, e && e.name);
+      if (e && (e.name === 'QuotaExceededError' || e.code === 22)) {
+        try {  // 配额不足时清掉最早的历史会话再试一次
+          const list = JSON.parse(localStorage.getItem(LS_SESSIONS) || '[]');
+          if (list.length > 3) {
+            list.splice(-2);
+            localStorage.setItem(LS_SESSIONS, JSON.stringify(list));
+            localStorage.setItem(key, value);
+            return true;
+          }
+        } catch (_) { /* 忽略 */ }
+      }
+      return false;
+    }
+  }
+
   let state = {
     cid: localStorage.getItem(LS_CID) || newId(),
     sessionId: newId(),
@@ -1308,7 +1328,7 @@ body.dark .tour-card p{color:#8fa2b8}
     busy: false,
     isPlan: false,
   };
-  localStorage.setItem(LS_CID, state.cid);
+  lsSet(LS_CID, state.cid);
 
   function newId() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -1389,15 +1409,19 @@ body.dark .tour-card p{color:#8fa2b8}
     }
     const body = document.createElement('div');
     if (role === 'assistant' && content) {
+      // 打字机效果按长度自适应：长回复保证 1 秒内出完，避免用户盯着"慢慢打字"干等
+      const total = content.length;
+      const step = total > 500 ? 24 : total > 240 ? 8 : 2;
       let i = 0;
       const tick = () => {
-        i = Math.min(content.length, i + 2);
+        i = Math.min(total, i + step);
         body.textContent = content.slice(0, i);
         scrollBottom();
-        if (i < content.length) setTimeout(tick, 18);
+        if (i < total) setTimeout(tick, 16);
         else body.innerHTML = renderText(content);
       };
-      tick();
+      if (total > 500) { body.innerHTML = renderText(content); }   // 超长直接整段渲染
+      else tick();
     } else {
       body.innerHTML = renderText(content);
     }
@@ -1474,7 +1498,7 @@ body.dark .tour-card p{color:#8fa2b8}
   }
 
   function saveFavs(list) {
-    localStorage.setItem(LS_FAVS, JSON.stringify(list.slice(0, 50)));
+    lsSet(LS_FAVS, JSON.stringify(list.slice(0, 50)));
     renderFavs();
   }
 
@@ -1896,7 +1920,7 @@ body.dark .tour-card p{color:#8fa2b8}
         else { step++; render(); }
       }
     });
-    function finish(){ mask.remove(); localStorage.setItem('xs_tour', '1'); }
+    function finish(){ mask.remove(); lsSet('xs_tour', '1'); }
     render();
     document.body.appendChild(mask);
   })();
@@ -1995,6 +2019,10 @@ body.dark .tour-card p{color:#8fa2b8}
     const text = inputEl.value.trim();
     const image = state.pendingImage;
     if (!text && !image) return;
+    if (!navigator.onLine) {
+      appendMessage('assistant', '📡 当前没有网络连接，等联网后把刚才的话再发一次就好～');
+      return;
+    }
 
     const shownText = text || '这张照片里是哪个景点？帮我看看';
     appendMessage('user', text || '（上传了一张照片）', image);
@@ -2026,7 +2054,7 @@ body.dark .tour-card p{color:#8fa2b8}
       isPlan: !!state.isPlan,
       time: Date.now(),
     });
-    localStorage.setItem(LS_SESSIONS, JSON.stringify(list.slice(0, MAX_SESSIONS)));
+    lsSet(LS_SESSIONS, JSON.stringify(list.slice(0, MAX_SESSIONS)));
     renderHistory();
   }
 
@@ -2275,7 +2303,7 @@ body.dark .tour-card p{color:#8fa2b8}
   }
   themeBtn.addEventListener('click', () => {
     const dark = document.body.classList.toggle('dark');
-    localStorage.setItem('xs_theme', dark ? 'dark' : 'light');
+    lsSet('xs_theme', dark ? 'dark' : 'light');
     themeBtn.textContent = dark ? '☀️' : '🌙';
   });
 
@@ -2321,7 +2349,7 @@ body.dark .tour-card p{color:#8fa2b8}
   }
 
   function saveList(items) {
-    localStorage.setItem(LS_LIST, JSON.stringify(items.slice(0, 100)));
+    lsSet(LS_LIST, JSON.stringify(items.slice(0, 100)));
     renderList();
   }
 
@@ -2386,7 +2414,7 @@ body.dark .tour-card p{color:#8fa2b8}
   function bumpStat(key) {
     const st = loadStats();
     st[key] = (st[key] || 0) + 1;
-    localStorage.setItem(LS_STATS, JSON.stringify(st));
+    lsSet(LS_STATS, JSON.stringify(st));
     renderBadges();
   }
   function renderBadges() {
