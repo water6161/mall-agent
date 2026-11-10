@@ -265,5 +265,65 @@ class TestRunFallbacks(unittest.TestCase):
         self.assertEqual(got["spot"]["name"], "故宫博物院")
 
 
+class TestSpotTask(unittest.TestCase):
+    """识图异步任务：创建即返回、后台完成、轮询可取、丢失有兜底。"""
+
+    def setUp(self):
+        _core._TASKS.clear()
+
+    def test_task_lifecycle(self):
+        original_run = _core.run
+
+        def slow_run(env, message, history=None, image=None):
+            time.sleep(0.3)
+            return {"reply": "这是故宫博物院！", "points": [], "spot": {"name": "故宫博物院"}}
+
+        _core.run = slow_run
+        try:
+            tid = _core.task_create(make_env(), "看照片", [], "data:image/jpeg;base64,x")
+            # 创建后立刻可轮询：要么 processing，要么 done，绝不报错
+            first = _core.task_status(tid)
+            self.assertIn(first.get("task_status"), ("processing", "done"))
+            # 等后台线程跑完，轮询应拿到完整结果
+            deadline = time.time() + 3
+            got = None
+            while time.time() < deadline:
+                got = _core.task_status(tid)
+                if got.get("task_status") == "done":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(got["task_status"], "done")
+            self.assertEqual(got["reply"], "这是故宫博物院！")
+            # 结果保留到 TTL：重复轮询安全（不会取一次就丢）
+            again = _core.task_status(tid)
+            self.assertEqual(again["task_status"], "done")
+        finally:
+            _core.run = original_run
+
+    def test_task_exception_becomes_reply(self):
+        original_run = _core.run
+
+        def boom(env, message, history=None, image=None):
+            raise RuntimeError("模型挂了")
+
+        _core.run = boom
+        try:
+            tid = _core.task_create(make_env(), "看照片", [], "data:image/jpeg;base64,x")
+            deadline = time.time() + 3
+            got = None
+            while time.time() < deadline:
+                got = _core.task_status(tid)
+                if got.get("task_status") == "done":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(got["task_status"], "done")
+            self.assertIn("识别出了点问题", got["reply"])
+        finally:
+            _core.run = original_run
+
+    def test_unknown_task_returns_none(self):
+        self.assertIsNone(_core.task_status("t-not-exist"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

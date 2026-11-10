@@ -11,6 +11,7 @@
 import json
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -927,6 +928,61 @@ def _summarize_history(env: dict, msgs: list) -> str | None:
     if s:
         _cache_set(key, s, 1800)
     return s or None
+
+
+# ─── 识图异步任务（进程内，尽力而为） ─────────────────────────
+# 与 TTL 缓存同一存活假设：边缘函数实例复用期间有效，实例回收任务即失效，
+# 前端对超时/丢失有兜底（提示重新上传）。多实例部署时替换为 Redis 即可。
+
+_TASKS: dict = {}
+_TASK_TTL = 900          # 任务结果保留 15 分钟
+_TASK_LOCK = threading.Lock()
+
+
+def _task_gc() -> None:
+    now = time.time()
+    with _TASK_LOCK:
+        for tid in [t for t, v in _TASKS.items() if now - v["created"] > _TASK_TTL]:
+            _TASKS.pop(tid, None)
+
+
+def task_create(env: dict, message: str, history: list, image: str) -> str:
+    """创建识图任务：后台线程执行完整识别链路，立刻返回 task_id。"""
+    _task_gc()
+    tid = f"t{time.time_ns()}"
+    with _TASK_LOCK:
+        _TASKS[tid] = {"status": "processing", "created": time.time(), "result": None}
+
+    def _work():
+        t0 = time.time()
+        try:
+            result = run(env, message, history=history, image=image)
+        except Exception as e:
+            result = {"reply": f"😵‍💫 识别出了点问题：{str(e)[:160]}，请重新拍一张试试～",
+                      "points": []}
+        result = dict(result)
+        result["task_id"] = tid
+        result["task_status"] = "done"
+        with _TASK_LOCK:
+            if tid in _TASKS:
+                _TASKS[tid]["status"] = "done"
+                _TASKS[tid]["result"] = result
+        _log("spot-task", t0, status="done")
+
+    threading.Thread(target=_work, daemon=True).start()
+    return tid
+
+
+def task_status(task_id: str) -> dict | None:
+    """轮询任务状态；done 时返回完整结果（结果保留到 TTL，重复轮询安全）。"""
+    _task_gc()
+    with _TASK_LOCK:
+        t = _TASKS.get(task_id)
+        if not t:
+            return None
+        if t["status"] == "done" and t["result"]:
+            return t["result"]
+        return {"task_status": "processing"}
 
 
 def run(env: dict, message: str, history: list | None = None,

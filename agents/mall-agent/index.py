@@ -18,9 +18,9 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 try:  # 私有模块 _core.py：包内相对导入优先，本地直跑时退回绝对导入
-    from ._core import resolve_env, run
+    from ._core import resolve_env, run, task_create, task_status
 except (ImportError, SystemError):
-    from _core import resolve_env, run  # type: ignore
+    from _core import resolve_env, run, task_create, task_status  # type: ignore
 
 
 def _context_env(context) -> dict:
@@ -124,6 +124,16 @@ def _rate_ok(ip: str) -> bool:
 async def handler(context):
     body = await _read_body(getattr(context, "request", None))
 
+    # 1) 识图任务轮询：轻量、无 LLM 调用，不消耗 IP 限流额度
+    task_id = body.get("task_id")
+    if task_id:
+        result = task_status(task_id)
+        if result is None:
+            return {"task_status": "error",
+                    "reply": "任务不存在或已过期（服务实例重启会丢任务），请重新上传照片～",
+                    "points": []}
+        return result
+
     ip = _client_ip(getattr(context, "request", None))
     if not _rate_ok(ip):
         return {"reply": "😅 你请求得有点太频繁啦，休息几分钟再来吧～", "points": []}
@@ -133,6 +143,13 @@ async def handler(context):
     image = body.get("image") or None
 
     env = resolve_env(_context_env(context))
+
+    # 2) 识图请求异步化：立刻返回任务号，后台线程跑识别，前端轮询回填
+    #    （豆包式体验：提交后即可继续聊天）；ASYNC_SPOT=0 可切回同步
+    if image and os.environ.get("ASYNC_SPOT", "1") != "0":
+        shown = (message or "").strip() or "这张照片里是哪个景点？帮我看看"
+        tid = task_create(env, shown, history, image)
+        return {"task_status": "processing", "task_id": tid, "reply": "", "points": []}
 
     try:
         result = run(env, message, history=history, image=image)

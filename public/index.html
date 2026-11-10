@@ -1980,6 +1980,57 @@ body.dark .tour-card p{color:#8fa2b8}
     return res.json();
   }
 
+  /* 识图低置信度：两条快捷纠错入口（确认 / 换答案），不让猜测当结论 */
+  function applySpotConfirm(bubbleEl, data) {
+    if (!(data.spot && typeof data.spot.confidence === 'number' && data.spot.confidence < 0.6)) return;
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;';
+    const ask = document.createElement('button');
+    ask.className = 'share-btn'; ask.type = 'button';
+    ask.textContent = '✏️ 不是它？输入正确地名';
+    ask.addEventListener('click', () => { inputEl.focus(); inputEl.placeholder = '比如：天坛公园'; });
+    const again = document.createElement('button');
+    again.className = 'share-btn'; again.type = 'button';
+    again.textContent = '📷 重新拍一张';
+    again.addEventListener('click', () => { if (!state.busy) document.getElementById('imgInput')?.click(); });
+    bar.appendChild(ask); bar.appendChild(again);
+    bubbleEl.appendChild(bar);
+  }
+
+  /* 识图异步任务轮询：提交后立刻解锁对话，识别完成原地回填结果（豆包式体验） */
+  function pollSpotTask(taskId, bubbleEl, attempt) {
+    const MAX_POLL = 40; // 2s × 40 = 80 秒，与同步请求超时对齐
+    fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Makers-Conversation-Id': state.cid },
+      body: JSON.stringify({ task_id: taskId }),
+    }).then((r) => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then((data) => {
+        if (data.task_status === 'done' && data.reply) {
+          bubbleEl.innerHTML = renderText(data.reply);
+          state.messages.push({ role: 'assistant', content: data.reply });
+          applySpotConfirm(bubbleEl, data);
+          if (data.points && data.points.length) renderMap(data.points, !!data.plan);
+          if (data.plan) bumpStat('plan');
+          scrollBottom();
+          saveSession();
+        } else if (data.task_status === 'error') {
+          bubbleEl.innerHTML = renderText(data.reply || '😵‍💫 识别任务丢了，请重新拍一张试试～');
+        } else if (attempt >= MAX_POLL) {
+          bubbleEl.innerHTML = renderText('⌛ 识别等了 80 秒还没完成（服务可能繁忙），请重新拍一张试试～');
+        } else {
+          setTimeout(() => pollSpotTask(taskId, bubbleEl, attempt + 1), 2000);
+        }
+      })
+      .catch(() => {
+        if (attempt >= MAX_POLL) {
+          bubbleEl.innerHTML = renderText('📡 识别结果查询失败，请重新拍一张试试～');
+        } else {
+          setTimeout(() => pollSpotTask(taskId, bubbleEl, attempt + 1), 3000);
+        }
+      });
+  }
+
   async function deliver(shownText, image) {
     state.busy = true;
     sendBtn.disabled = true;
@@ -1987,25 +2038,19 @@ body.dark .tour-card p{color:#8fa2b8}
     try {
       const data = await requestReply(shownText, image);
       removeTyping();
+
+      // 异步识图：拿到任务号就立刻解锁对话，占位气泡等轮询回填
+      if (data.task_id && !data.reply) {
+        const pending = appendMessage('assistant',
+          '⏳ 照片已提交识别，大概需要 5～15 秒。这段时间可以继续问我别的，结果出来后这条消息会自动更新～');
+        pollSpotTask(data.task_id, pending, 0);
+        return;
+      }
+
       const reply = data.reply || '抱歉，这次没生成出回复～';
       const replyBubble = appendMessage('assistant', reply);
       state.messages.push({ role: 'assistant', content: reply });
-
-      // 识图低置信度：给用户两条快捷纠错入口（确认 / 换答案），不让猜测当结论
-      if (data.spot && typeof data.spot.confidence === 'number' && data.spot.confidence < 0.6) {
-        const bar = document.createElement('div');
-        bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;';
-        const ask = document.createElement('button');
-        ask.className = 'share-btn'; ask.type = 'button';
-        ask.textContent = '✏️ 不是它？输入正确地名';
-        ask.addEventListener('click', () => { inputEl.focus(); inputEl.placeholder = '比如：天坛公园'; });
-        const again = document.createElement('button');
-        again.className = 'share-btn'; again.type = 'button';
-        again.textContent = '📷 重新拍一张';
-        again.addEventListener('click', () => { if (!state.busy) document.getElementById('imgInput')?.click(); });
-        bar.appendChild(ask); bar.appendChild(again);
-        replyBubble.appendChild(bar);
-      }
+      applySpotConfirm(replyBubble, data);
 
       if (data.points && data.points.length) renderMap(data.points, !!data.plan);
       if (data.plan) bumpStat('plan');
