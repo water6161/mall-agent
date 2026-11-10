@@ -41,29 +41,78 @@ def fake_poi(name="测试地点", rating="4.5", ptype="风景名胜", cat_lng=11
 
 
 class TestQuickIntent(unittest.TestCase):
-    """规则快速通道：命中要准，拿不准必须交回模型。"""
+    """规则快速通道：命中要准，拿不准必须交回模型。
 
-    def test_city_plus_single_category(self):
-        cases = {
-            "北京有什么好吃的": ("food", "北京"),
-            "上海商场": ("shopping", "上海"),
-            "成都酒店": ("hotel", "成都"),
-            "深圳景点": ("sightseeing", "深圳"),
-            "帮我安排北京一日游": ("plan", "北京"),
-        }
-        for text, (intent, city) in cases.items():
-            with self.subTest(text=text):
-                got = _core._quick_intent(text)
-                self.assertIsNotNone(got, f"应命中规则: {text}")
-                self.assertEqual(got["intent"], intent)
-                self.assertEqual(got["city"], city)
+    问法集扩到 100+ 条真实句式（覆盖 5 大意图 × 多城市 + 决策/闲聊等反例）。
+    新增规则关键词时先在这里加用例，跑一遍确认没有误伤再上线。
+    """
 
-    def test_ambiguous_goes_to_llm(self):
-        # 对比 / 带预算 / 多品类 / 无城市 / 长句，都应返回 None 交给模型
-        for text in ["北京故宫和景山哪个好", "帮我找个5000以内的相机",
-                     "你好呀", "北京有什么好玩的还能吃饭逛街", ""]:
+    # 应命中规则快速通道：文本 -> (期望意图, 期望城市)
+    POSITIVE = {
+        "plan": [
+            "帮我安排北京一日游", "北京一日游", "上海两日游", "成都三日游", "西安四日游",
+            "重庆玩几天怎么安排", "杭州旅游路线安排", "南京帮我安排一下行程", "厦门旅游规划",
+            "青岛一日游", "苏州两日游行程", "广州一日游怎么安排", "长沙三日游", "昆明旅游规划",
+            "天津一日游", "武汉两日游", "沈阳一日游", "哈尔滨旅游规划", "济南一日游", "宁波旅游规划",
+        ],
+        "food": [
+            "北京有什么好吃的", "上海美食推荐", "成都火锅", "杭州小吃", "广州找餐厅",
+            "西安美食", "南京好吃的餐厅", "重庆火锅", "长沙美食推荐", "青岛海鲜餐厅",
+            "天津找吃的", "苏州美食", "厦门小吃推荐", "昆明餐厅推荐", "大连海鲜餐厅",
+            "哈尔滨红肠餐厅", "济南美食推荐", "南昌小吃", "福州餐厅", "贵阳美食",
+        ],
+        "hotel": [
+            "北京酒店", "上海住哪", "成都住宿推荐", "杭州民宿", "广州酒店推荐",
+            "西安宾馆", "南京住宿", "厦门民宿推荐", "青岛海景酒店", "三亚酒店",
+            "昆明酒店", "哈尔滨住宿", "济南酒店", "福州民宿", "南宁住宿",
+        ],
+        "shopping": [
+            "北京商场", "上海购物中心", "成都逛街", "杭州购物", "广州商场推荐",
+            "南京购物中心", "深圳百货", "重庆逛街推荐", "武汉商场", "天津购物中心",
+            "长沙商场", "青岛购物中心", "沈阳逛街", "济南商场", "宁波购物中心",
+        ],
+        "sightseeing": [
+            "北京景点", "上海好玩的地方", "成都景点推荐", "杭州西湖景点", "西安旅游景点",
+            "南京景点", "厦门鼓浪屿景点", "青岛景点推荐", "重庆旅游打卡", "武汉公园景点",
+        ],
+    }
+
+    # 不应命中（必须交回 LLM 判定）：对比 / 预算 / 多品类 / 无城市 / 闲聊 / 追问上下文
+    NEGATIVE = [
+        "北京故宫和景山哪个好", "万象城和卓悦中心哪个好", "帮我找个5000以内的相机",
+        "你好呀", "在吗", "谢谢", "你是谁", "今天心情不好", "随便聊聊",
+        "北京有什么好玩的还能吃饭逛街", "帮我找酒店顺便看看吃的",
+        "三亚还是厦门适合度假", "预算3000买什么手机好", "这个和那个比怎么样",
+        "北京啊上海啊哪里都行", "我上次说的那个地方呢", "帮我对比一下万象城和国贸",
+        "昨天推荐的那家餐厅叫什么", "把上一条的景点加进行程", "它开门吗",
+        "北京天气怎么样", "帮我写一首诗", "1+1等于几", "把我的购物清单给我看看",
+        "再推荐几个类似的",
+    ]
+
+    def test_positive_cases(self):
+        total = sum(len(v) for v in self.POSITIVE.values())
+        self.assertGreaterEqual(total, 80, "正向用例应不少于 80 条")
+        for intent, texts in self.POSITIVE.items():
+            for text in texts:
+                with self.subTest(text=text):
+                    got = _core._quick_intent(text)
+                    self.assertIsNotNone(got, f"应命中规则: {text}")
+                    self.assertEqual(got["intent"], intent, f"意图判错: {text}")
+                    self.assertIn(got["city"], text, f"城市提取错误: {text}")
+
+    def test_negative_cases(self):
+        self.assertGreaterEqual(len(self.NEGATIVE), 25, "反例应不少于 25 条")
+        for text in self.NEGATIVE:
             with self.subTest(text=text):
                 self.assertIsNone(_core._quick_intent(text), f"不该命中规则: {text}")
+
+    def test_total_corpus_size(self):
+        total = sum(len(v) for v in self.POSITIVE.values()) + len(self.NEGATIVE)
+        self.assertGreaterEqual(total, 100, f"问法语料应达到 100 条，当前 {total}")
+
+    def test_rule_output_schema(self):
+        got = _core._quick_intent("北京有什么好吃的")
+        self.assertEqual(set(got.keys()), {"intent", "city", "preference"})
 
 
 class TestParseJson(unittest.TestCase):

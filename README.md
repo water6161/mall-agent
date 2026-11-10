@@ -5,6 +5,8 @@
 > 🌐 **在线体验**：部署于腾讯云 EdgeOne Pages，push 即自动构建
 > 🎓 本项目为课程实践作品，欢迎交流
 
+![core-tests](https://github.com/water6161/mall-agent/actions/workflows/test.yml/badge.svg)
+
 ---
 
 ## ✨ 核心功能
@@ -104,11 +106,11 @@ mall-agent/
 python -m unittest discover -s tests -v
 ```
 
-当前覆盖 17 个用例，分 6 组：
+当前覆盖 19 个测试组 / **110 条意图问法语料**（85 条正向 + 25 条反例），分 6 组：
 
 | 测试组 | 覆盖内容 |
 |---|---|
-| `TestQuickIntent` | 规则快速通道：明确句子必须命中；对比/预算/多品类/长句必须交回模型 |
+| `TestQuickIntent` | 规则快速通道：110 条真实问法（5 大意图 × 多城市），对比/预算/多品类/闲聊必须交回模型 |
 | `TestParseJson` | 模型输出容错：纯 JSON / ```json 围栏 / 夹带废话 / 坏 JSON |
 | `TestCache` | 缓存命中与过期；同一 POI 查询第二次不再打高德 |
 | `TestRankPoints` | 同名去重保留最高评分、按评分降序、空输入 |
@@ -116,6 +118,7 @@ python -m unittest discover -s tests -v
 | `TestRunFallbacks` | 全链路兜底：Key 错误提示、模型异常提示、低置信度识图提示 |
 
 > 改提示词或路由规则后跑一遍，能立刻发现有没有把正常问法判错——这是防止「改一处坏一处」的最低成本手段。
+> 以上测试由 GitHub Actions 在每次 push / PR 时自动执行（见顶部徽章）。
 
 ## 🔒 安全设计
 
