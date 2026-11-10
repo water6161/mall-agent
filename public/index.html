@@ -1780,20 +1780,26 @@ body.dark .tour-card p{color:#8fa2b8}
     const d = new Date();
     let day = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
     function stamp(h, m){ return day + 'T' + pad(h) + pad(m) + '00'; }
-    let h = 9, out = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//xiaoshui//plan//CN'];
+    let cursor = 9 * 60; // 从 9:00 开始，用分钟做游标
+    out.push('BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//xiaoshui//plan//CN');
+    // 不同类型停留时长不同：景点慢慢逛、吃饭一小时、购物快一些
+    const STAY = { sightseeing: 120, food: 60, shopping: 75, hotel: 60 };
     state.points.forEach(function(p, i){
-      const dur = 90;
+      const stay = STAY[p.category] || 90;
+      const startH = Math.floor(cursor / 60), startM = cursor % 60;
+      const end = cursor + stay;
       out.push('BEGIN:VEVENT',
         'UID:xiaoshui-' + day + '-' + i + '@plan',
-        'DTSTART:' + stamp(h, 0),
-        'DTEND:' + stamp(h + Math.floor(dur / 60), dur % 60),
+        'DTSTART:' + stamp(startH, startM),
+        'DTEND:' + stamp(Math.floor(end / 60), end % 60),
         'SUMMARY:第' + (i + 1) + '站 · ' + (p.name || '景点'),
         'DESCRIPTION:' + String(p.desc || '').replace(/\n/g, ' ').slice(0, 200),
         'LOCATION:' + Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5),
         'BEGIN:VALARM','TRIGGER:-PT30M','ACTION:DISPLAY',
         'DESCRIPTION:马上出发去 ' + (p.name || '下一站') + ' 啦','END:VALARM',
         'END:VEVENT');
-      h += 2; if (h > 18) h = 20;
+      cursor += stay + 30; // 游玩 + 半小时通勤转场
+      if (cursor > 20 * 60) cursor = 20 * 60; // 排到 20 点以后就压缩在 20:00
     });
     out.push('END:VCALENDAR');
     const blob = new Blob([out.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
@@ -1982,8 +1988,24 @@ body.dark .tour-card p{color:#8fa2b8}
       const data = await requestReply(shownText, image);
       removeTyping();
       const reply = data.reply || '抱歉，这次没生成出回复～';
-      appendMessage('assistant', reply);
+      const replyBubble = appendMessage('assistant', reply);
       state.messages.push({ role: 'assistant', content: reply });
+
+      // 识图低置信度：给用户两条快捷纠错入口（确认 / 换答案），不让猜测当结论
+      if (data.spot && typeof data.spot.confidence === 'number' && data.spot.confidence < 0.6) {
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;';
+        const ask = document.createElement('button');
+        ask.className = 'share-btn'; ask.type = 'button';
+        ask.textContent = '✏️ 不是它？输入正确地名';
+        ask.addEventListener('click', () => { inputEl.focus(); inputEl.placeholder = '比如：天坛公园'; });
+        const again = document.createElement('button');
+        again.className = 'share-btn'; again.type = 'button';
+        again.textContent = '📷 重新拍一张';
+        again.addEventListener('click', () => { if (!state.busy) document.getElementById('imgInput')?.click(); });
+        bar.appendChild(ask); bar.appendChild(again);
+        replyBubble.appendChild(bar);
+      }
 
       if (data.points && data.points.length) renderMap(data.points, !!data.plan);
       if (data.plan) bumpStat('plan');

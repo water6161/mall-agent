@@ -298,7 +298,7 @@ def resolve_env(env: dict | None = None) -> dict:
 # ─── LLM ───────────────────────────────────────────────────
 
 def _chat(env: dict, messages: list, model: str | None = None,
-          temperature: float = 0.3) -> str:
+          temperature: float = 0.3, timeout: int = TIMEOUT) -> str:
     if not env.get("api_key"):
         raise RuntimeError("未配置 OPENAI_API_KEY")
 
@@ -314,7 +314,7 @@ def _chat(env: dict, messages: list, model: str | None = None,
             "Authorization": f"Bearer {env['api_key']}",
             "Content-Type": "application/json",
         },
-        TIMEOUT,
+        timeout,
     )
     if status != 200:
         raise RuntimeError(f"模型返回 {status}：{text[:160]}")
@@ -550,6 +550,12 @@ def _run_plan(env: dict, message: str, city: str, preference: str = "") -> dict:
     except Exception as e:
         names = "、".join(p["name"] for p in points[:6])
         reply = f"给你找到 {city} 这些地方：{names}\n（详细行程没生成成功：{str(e)[:80]}）"
+
+    weather = _weather_line(env, city,
+                            points[0].get("lat") if points else None,
+                            points[0].get("lng") if points else None)
+    if weather:
+        reply += f"\n\n🌤️ 出行天气：{city} {weather}。晴天适合户外观景，雨天记得给行程里加点博物馆、商场这类室内站～"
 
     return {
         "reply": reply,
@@ -867,18 +873,60 @@ def _spot_result(env: dict, spot: dict) -> dict:
 
 # ─── 主流程 ─────────────────────────────────────────────────
 
-def _history_messages(history: list | None) -> list:
+def _history_messages(history: list | None, env: dict | None = None) -> list:
     if not history:
         return []
+    items = [it for it in history if isinstance(it, dict)]
+    older, recent = items[:-6], items[-6:]
+
     out = []
-    for item in history[-6:]:
-        if not isinstance(item, dict):
-            continue
-        role = item.get("role")
-        content = item.get("content")
+    if older:
+        old_msgs = [{"role": it.get("role"), "content": it.get("content", "")}
+                    for it in older
+                    if it.get("role") in ("user", "assistant")
+                    and isinstance(it.get("content"), str) and it["content"].strip()]
+        if old_msgs:
+            summary = _summarize_history(env, old_msgs) if env else None
+            if summary:
+                out.append({"role": "system",
+                            "content": f"（本次对话更早内容的摘要，用于保持上下文）{summary}"})
+            else:
+                # 摘要失败（无 Key/超时）时保底：带上最近一条较早消息，不丢最后的语境
+                out.append({"role": old_msgs[-1]["role"],
+                            "content": old_msgs[-1]["content"][:400]})
+    for it in recent:
+        role = it.get("role")
+        content = it.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             out.append({"role": role, "content": content[:1500]})
     return out
+
+
+HISTORY_SUMMARY_PROMPT = (
+    "把下面的对话压缩成 100 字以内的要点，必须保留：提到的城市和地点、"
+    "用户的偏好（预算/品类/忌口等）、已经给出的关键推荐结论。"
+    "直接输出摘要正文，不要任何前缀和客套。\n\n对话内容：\n"
+)
+
+_SUMMARY_TIMEOUT = 10  # 摘要是锦上添花，不能拖慢主请求
+
+
+def _summarize_history(env: dict, msgs: list) -> str | None:
+    if not env or not env.get("api_key"):
+        return None
+    key = ("hsum", tuple(m["content"][:200] for m in msgs))
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    text = "\n".join(f"{m['role']}: {m['content'][:400]}" for m in msgs[-12:])
+    try:
+        s = _chat(env, [{"role": "user", "content": HISTORY_SUMMARY_PROMPT + text}],
+                  temperature=0, timeout=_SUMMARY_TIMEOUT).strip()[:500]
+    except Exception:
+        return None
+    if s:
+        _cache_set(key, s, 1800)
+    return s or None
 
 
 def run(env: dict, message: str, history: list | None = None,
@@ -888,7 +936,7 @@ def run(env: dict, message: str, history: list | None = None,
     message = (message or "").strip()
     if len(message) > 500:                  # 超长输入截断，避免 prompt 膨胀
         message = message[:500]
-    history_msgs = _history_messages(history)
+    history_msgs = _history_messages(history, env)
 
     if not env.get("api_key"):
         return {
